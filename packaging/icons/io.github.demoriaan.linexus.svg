@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1c2438"/>
+      <stop offset="0.55" stop-color="#0e1320"/>
+      <stop offset="1" stop-color="#06080e"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.10"/>
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#3ee6ca"/>
+      <stop offset="0.5" stop-color="#5aa9ff"/>
+      <stop offset="1" stop-color="#b98cff"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#121826"/>
+      <stop offset="1" stop-color="#05070c"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#4fc3f7" stop-opacity="0.55"/>
+      <stop offset="0.6" stop-color="#5aa9ff" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#5aa9ff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="spark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3ee6ca" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#3ee6ca" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="touch" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.7" stop-color="#e9e2ff"/>
+      <stop offset="1" stop-color="#b98cff"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#bg)"/>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#sheen)"/>
+  <rect x="17.5" y="17.5" width="477" height="477" rx="110.5" fill="none" stroke="#ffffff" stroke-opacity="0.07" stroke-width="3"/>
+
+  <ellipse cx="256" cy="300" rx="236" ry="92" fill="url(#glow)"/>
+
+  <rect x="52" y="196" width="408" height="120" rx="30" fill="url(#rim)"/>
+  <rect x="58" y="202" width="396" height="108" rx="25" fill="url(#glass)"/>
+
+  <path d="M84 282 L84 262 L102 254 L118 266 L136 238 L154 246 L172 226 L190 236 L190 282 Z" fill="url(#spark)"/>
+  <polyline points="84,262 102,254 118,266 136,238 154,246 172,226 190,236" fill="none" stroke="#3ee6ca" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="222" y="244" width="13" height="38" rx="6.5" fill="#ffb84d"/>
+  <rect x="243" y="228" width="13" height="54" rx="6.5" fill="#ffb84d"/>
+  <rect x="264" y="252" width="13" height="30" rx="6.5" fill="#ffb84d" fill-opacity="0.85"/>
+  <rect x="285" y="236" width="13" height="46" rx="6.5" fill="#ffb84d" fill-opacity="0.7"/>
+
+  <circle cx="384" cy="256" r="40" fill="none" stroke="#b98cff" stroke-opacity="0.45" stroke-width="5"/>
+  <circle cx="384" cy="256" r="23" fill="url(#touch)"/>
+</svg>

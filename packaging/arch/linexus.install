@@ -1,0 +1,38 @@
+post_install() {
+  if command -v udevadm >/dev/null 2>&1; then
+    udevadm control --reload-rules || true
+    udevadm trigger --subsystem-match=hidraw || true
+  fi
+  cat <<'MSG'
+Linexus installed.
+
+Next steps for your desktop user:
+  1. Unplug/replug the Corsair iCUE Nexus.
+  2. Start the daemon now and at every login:
+       systemctl --user enable --now linexusd.service
+  3. Initialize/fix local config and service state if needed:
+       linexusctl doctor --fix
+  4. Open Linexus Studio from the app launcher or run:
+       linexus-studio
+
+Optional, for keyboard shortcut and typing actions on Wayland:
+       sudo systemctl enable --now linexus-inputd@$(id -u).service
+MSG
+}
+
+post_upgrade() {
+  post_install
+}
+
+post_remove() {
+  if command -v udevadm >/dev/null 2>&1; then
+    udevadm control --reload-rules || true
+    udevadm trigger --subsystem-match=hidraw || true
+  fi
+  cat <<'MSG'
+Linexus removed.
+
+Per-user config is not removed by pacman. Remove it manually if desired:
+  rm -rf ~/.config/linexus ~/.local/state/linexus
+MSG
+}

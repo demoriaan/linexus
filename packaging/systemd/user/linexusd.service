@@ -1,0 +1,14 @@
+[Unit]
+Description=Linexus daemon for the Corsair iCUE Nexus
+Documentation=https://github.com/demoriaan/linexus
+After=graphical-session.target dbus.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/linexusd
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=default.target

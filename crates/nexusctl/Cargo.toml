@@ -1,0 +1,27 @@
+[package]
+name = "nexusctl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "linexusctl"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+base64 = "0.22"
+clap.workspace = true
+hidapi.workspace = true
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+nexus-core = { path = "../nexus-core" }
+nexus-render = { path = "../nexus-render" }
+nexus-sensors = { path = "../nexus-sensors" }
+nexus-actions = { path = "../nexus-actions" }
+nexus-config = { path = "../nexus-config" }
+nexus-events = { path = "../nexus-events" }
+serde_json.workspace = true
+nexus-ipc = { path = "../nexus-ipc" }
+nexus-pack = { path = "../nexus-pack" }
+nexus-input = { path = "../nexus-input" }

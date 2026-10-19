@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Linexus Studio
+GenericName=Corsair iCUE Nexus configurator
+Comment=Design the pages of your Corsair iCUE Nexus touch strip
+Exec=linexus-studio
+Icon=io.github.demoriaan.linexus
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=Corsair;iCUE;Nexus;HID;Hardware;Touchscreen;
+Actions=news;
+
+[Desktop Action news]
+Name=News & feeds
+Exec=linexus-studio --section news

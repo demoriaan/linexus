@@ -1,0 +1,17 @@
+[package]
+name = "nexus-inputd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "linexus-inputd"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+libc.workspace = true
+nexus-input = { path = "../nexus-input" }
+serde_json.workspace = true

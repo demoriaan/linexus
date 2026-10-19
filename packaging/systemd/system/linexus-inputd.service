@@ -1,0 +1,22 @@
+[Unit]
+Description=Linexus input helper for one user (keyboard shortcuts and typing)
+Documentation=file:/usr/share/doc/linexus/input-helper.md
+After=systemd-logind.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/lib/linexus/linexus-inputd --allow-uid 1000
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+DevicePolicy=closed
+DeviceAllow=/dev/uinput rw
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

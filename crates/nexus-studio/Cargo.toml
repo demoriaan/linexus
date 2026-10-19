@@ -1,0 +1,27 @@
+[package]
+name = "nexus-studio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "linexus-studio"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+base64 = "0.22"
+clap.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }
+nexus-actions = { path = "../nexus-actions" }
+nexus-config = { path = "../nexus-config" }
+nexus-core = { path = "../nexus-core" }
+nexus-events = { path = "../nexus-events" }
+nexus-ipc = { path = "../nexus-ipc" }
+nexus-pack = { path = "../nexus-pack" }
+nexus-render = { path = "../nexus-render" }
+nexus-sensors = { path = "../nexus-sensors" }
+serde.workspace = true
+serde_json.workspace = true

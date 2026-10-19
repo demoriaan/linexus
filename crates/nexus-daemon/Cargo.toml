@@ -1,0 +1,27 @@
+[package]
+name = "nexus-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "linexusd"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+base64 = "0.22"
+clap.workspace = true
+hidapi.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }
+nexus-core = { path = "../nexus-core" }
+nexus-render = { path = "../nexus-render" }
+nexus-sensors = { path = "../nexus-sensors" }
+nexus-config = { path = "../nexus-config" }
+nexus-actions = { path = "../nexus-actions" }
+nexus-events = { path = "../nexus-events" }
+nexus-ipc = { path = "../nexus-ipc" }
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true

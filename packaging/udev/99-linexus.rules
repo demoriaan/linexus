@@ -1,0 +1,5 @@
+# Corsair iCUE Nexus operational HID interface
+# uaccess grants the active seat user access on most desktops.
+# MODE/GROUP is an explicit fallback for systems where logind drops hidraw ACLs
+# across suspend/resume (seen on an Arch-based KDE Plasma system).
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1b1c", ATTRS{idProduct}=="1b8e", MODE="0660", GROUP="plugdev", TAG+="uaccess", TAG+="Corsair_iCUE_Nexus"

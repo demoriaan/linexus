@@ -1,0 +1,22 @@
+[Unit]
+Description=Linexus input helper (keyboard shortcuts and typing on Wayland)
+Documentation=file:%h/.local/share/doc/linexus/input-helper.md
+After=graphical-session.target
+ConditionPathExists=/dev/uinput
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/mkdir -p %t/linexus
+ExecStart=%h/.local/bin/linexus-inputd --socket-path %t/linexus/inputd.sock
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%t
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=default.target
