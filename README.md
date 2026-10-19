@@ -36,19 +36,17 @@ CPU, GPU (AMD through amdgpu), memory, disks and network from `/proc` and `/sys`
 
 ## Install
 
-Linexus needs a Linux system with a systemd user session. It is developed and tested on Arch Linux with KDE Plasma 6 (Wayland).
-
-**Arch Linux**
+On x86_64 Linux with a systemd user session, run this as your desktop user:
 
 ```sh
-git clone https://github.com/demoriaan/linexus.git
-cd linexus
-packaging/arch/build-local-package.sh
-sudo pacman -U packaging/arch/linexus-*.pkg.tar.zst
-systemctl --user enable --now linexusd.service
+curl -fsSL https://github.com/demoriaan/linexus/releases/latest/download/install.sh | bash
 ```
 
-**Other distributions** (Rust 1.88 or newer, a C compiler, `pkg-config` and the libudev headers)
+On Arch Linux and its derivatives the script installs the `linexus` package with pacman. On other distributions it puts the prebuilt binaries in `~/.local/bin` and adds the user services, the app launcher and a default config. It asks for your sudo password for the parts that need root (the package, or the device rule) and checks every download against the checksum list of the release. Read [install.sh](install.sh) first if you like; `... | bash -s -- --help` lists its options.
+
+**Manual download.** The [releases page](https://github.com/demoriaan/linexus/releases/latest) has the Arch package (`sudo pacman -U linexus-*-x86_64.pkg.tar.zst`) and a tarball with the binaries for other distributions.
+
+**From source** (Rust 1.88 or newer, a C compiler, `pkg-config` and the libudev headers):
 
 ```sh
 git clone https://github.com/demoriaan/linexus.git
@@ -56,7 +54,11 @@ cd linexus
 packaging/scripts/install-dev.sh --start
 ```
 
-The script builds release binaries, installs them to `~/.local/bin`, adds the udev rule (asks for sudo), the user services, the desktop entry and a default config. `install-dev.sh --help` lists its options, including `--uninstall`.
+On Arch, `packaging/arch/build-local-package.sh` builds the package from the checkout instead. [docs/install.md](docs/install.md) covers every option.
+
+**With an AI agent.** Point your coding agent to [docs/ai-agents.md](docs/ai-agents.md). It lists the exact commands, how to verify the result, and which steps the agent has to hand to you because they need root.
+
+It is developed and tested on Arch Linux with KDE Plasma 6 (Wayland).
 
 Then unplug and replug the Nexus, open **Linexus Studio** from your app launcher (or run `linexus-studio`) and check the Device section. `linexusctl doctor` prints the same checks in a terminal; `linexusctl doctor --fix` applies the safe fixes.
 
@@ -65,6 +67,7 @@ Other software that drives Corsair devices, such as OpenLinkHub, can claim the N
 ## Documentation
 
 - [Installation and troubleshooting](docs/install.md)
+- [Installing with an AI agent](docs/ai-agents.md)
 - [Using Linexus Studio](docs/studio.md)
 - [Configuration reference](docs/configuration.md)
 - [Input helper for shortcuts and typing](docs/input-helper.md)

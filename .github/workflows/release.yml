@@ -1,0 +1,154 @@
+name: Release
+
+# Builds the release files for a version tag and attaches them to a draft
+# release. Check the draft, then publish it; install.sh only sees published
+# releases.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build, for example v1.0.1
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+
+jobs:
+  version:
+    name: Tag matches the version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Compare
+        run: |
+          version="${TAG#v}"
+          cargo_version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)"
+          pkgver="$(sed -n 's/^pkgver=//p' packaging/arch/PKGBUILD)"
+          echo "tag $version, Cargo.toml $cargo_version, PKGBUILD $pkgver"
+          if [[ "$cargo_version $pkgver" != "$version $version" ]]; then
+            echo "::error::The tag, Cargo.toml and packaging/arch/PKGBUILD name different versions"
+            exit 1
+          fi
+
+  tarball:
+    name: Linux binaries (x86_64)
+    needs: version
+    runs-on: ubuntu-latest
+    # Ubuntu 22.04 keeps the glibc requirement at 2.35, so the binaries also
+    # run on older distributions.
+    container: ubuntu:22.04
+    steps:
+      - name: Build tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential pkg-config libudev-dev cmake curl ca-certificates git
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: packaging/scripts/build-release-tarball.sh dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tarball
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  arch:
+    name: Arch Linux package
+    needs: version
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - name: Build tools
+        run: pacman -Syu --noconfirm --needed git rust
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Build
+        # makepkg refuses to run as root.
+        run: |
+          useradd -m builder
+          chown -R builder: "$GITHUB_WORKSPACE"
+          sudo -u builder git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          sudo -u builder packaging/arch/build-local-package.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch
+          path: |
+            packaging/arch/linexus-*.pkg.tar.zst
+            !packaging/arch/linexus-debug-*
+          if-no-files-found: error
+
+  release:
+    name: Draft release
+    needs: [tarball, arch]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cp install.sh dist/
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Release notes
+        run: |
+          version="${TAG#v}"
+          {
+            awk -v v="$version" '
+              $0 ~ "^## \\[" v "\\]" { found = 1; next }
+              found && /^## \[/ { exit }
+              found { print }
+            ' CHANGELOG.md \
+              | sed "s#](docs/#](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/docs/#g"
+            cat <<EOF
+
+          ## Install
+
+          On x86_64 Linux with systemd, as your desktop user:
+
+          \`\`\`sh
+          curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/install.sh | bash
+          \`\`\`
+
+          It installs the Arch package on Arch Linux and its derivatives, and the prebuilt binaries in \`~/.local/bin\` elsewhere. Without the script:
+
+          - Arch Linux: \`sudo pacman -U linexus-${version}-1-x86_64.pkg.tar.zst\`
+          - Other distributions: unpack \`linexus-${version}-x86_64-linux.tar.gz\` and run \`packaging/scripts/install-dev.sh --bin-dir bin --start\` inside it.
+
+          Check the downloads with \`sha256sum -c SHA256SUMS --ignore-missing\`. See [docs/install.md](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/docs/install.md) for details.
+          EOF
+          } > notes.md
+          cat notes.md
+      - name: Create or update the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --draft --verify-tag \
+              --title "Linexus ${TAG#v}" --notes-file notes.md
+          fi

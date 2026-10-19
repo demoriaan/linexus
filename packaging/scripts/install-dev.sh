@@ -14,6 +14,7 @@ systemd_user_dir="${NEXUS_SYSTEMD_USER_DIR:-$HOME/.config/systemd/user}"
 config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
 config_path="$config_home/linexus/config.json"
 applications_dir="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+bin_dir="$repo_root/target/release"
 
 want_udev=1
 want_build=1
@@ -40,6 +41,7 @@ Default non-root behavior:
 Options:
   --no-udev      Skip udev installation/reload
   --no-build     Reuse existing release binaries
+  --bin-dir DIR  Install prebuilt binaries from DIR instead of building (implies --no-build)
   --no-config    Do not create default config
   --no-enable    Do not enable systemd --user service
   --start        Start/restart systemd --user service after install
@@ -58,6 +60,12 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-udev) want_udev=0 ;;
     --no-build) want_build=0 ;;
+    --bin-dir)
+      [[ $# -ge 2 ]] || { echo "--bin-dir needs a directory" >&2; exit 2; }
+      bin_dir="$(cd "$2" && pwd)"
+      want_build=0
+      shift
+      ;;
     --no-config) want_config=0 ;;
     --no-enable) want_enable=0 ;;
     --start) want_start=1 ;;
@@ -70,6 +78,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 uninstall_root_artifacts() {
+  systemctl disable --now linexus-inputd.service 2>/dev/null || true
   rm -f "$udev_dst"
   rm -f /etc/systemd/system/linexus-inputd.service
   rm -f /usr/local/lib/linexus/linexus-inputd
@@ -117,14 +126,14 @@ install_udev_rule() {
     echo "missing $udev_src" >&2
     exit 1
   fi
-  install -m 0644 "$udev_src" "$udev_dst"
-  if [[ -f "$repo_root/target/release/linexus-inputd" ]]; then
+  install -D -m 0644 "$udev_src" "$udev_dst"
+  if [[ -f "$bin_dir/linexus-inputd" ]]; then
     install -d -m 0755 /usr/local/lib/linexus
-    install -m 0755 "$repo_root/target/release/linexus-inputd" /usr/local/lib/linexus/linexus-inputd
+    install -m 0755 "$bin_dir/linexus-inputd" /usr/local/lib/linexus/linexus-inputd
     if [[ -f "$inputd_service_src" ]]; then
       tmp_service="$(mktemp)"
       sed "s/--allow-uid 1000/--allow-uid ${SUDO_UID:-1000}/" "$inputd_service_src" > "$tmp_service"
-      install -m 0644 "$tmp_service" /etc/systemd/system/linexus-inputd.service
+      install -D -m 0644 "$tmp_service" /etc/systemd/system/linexus-inputd.service
       rm -f "$tmp_service"
       systemctl daemon-reload || true
       echo "Installed /etc/systemd/system/linexus-inputd.service for uid ${SUDO_UID:-1000}"
@@ -133,7 +142,7 @@ install_udev_rule() {
   else
     echo "Input helper binary not built yet; skipping /usr/local/lib/linexus/linexus-inputd"
   fi
-  udevadm control --reload-rules
+  udevadm control --reload-rules || true
   udevadm trigger --subsystem-match=hidraw || true
   echo "Installed $udev_dst"
 }
@@ -175,10 +184,10 @@ if [[ $want_build -eq 1 ]]; then
 fi
 
 install -d -m 0755 "$install_prefix/bin"
-install -m 0755 "$repo_root/target/release/linexusctl" "$install_prefix/bin/linexusctl"
-install -m 0755 "$repo_root/target/release/linexusd" "$install_prefix/bin/linexusd"
-install -m 0755 "$repo_root/target/release/linexus-inputd" "$install_prefix/bin/linexus-inputd"
-install -m 0755 "$repo_root/target/release/linexus-studio" "$install_prefix/bin/linexus-studio"
+install -m 0755 "$bin_dir/linexusctl" "$install_prefix/bin/linexusctl"
+install -m 0755 "$bin_dir/linexusd" "$install_prefix/bin/linexusd"
+install -m 0755 "$bin_dir/linexus-inputd" "$install_prefix/bin/linexus-inputd"
+install -m 0755 "$bin_dir/linexus-studio" "$install_prefix/bin/linexus-studio"
 # Older installs copied the UI next to the binary; it is embedded now.
 rm -rf "$install_prefix/share/linexus/studio" "$install_prefix/bin/nexus-studio"
 echo "Installed binaries:"
@@ -272,7 +281,7 @@ fi
 if [[ $want_udev -eq 1 ]]; then
   if command -v sudo >/dev/null 2>&1; then
     echo "Installing udev rule via sudo..."
-    sudo "$0" --no-build --no-config --no-enable
+    sudo "$0" --no-build --no-config --no-enable --bin-dir "$bin_dir"
   else
     echo "sudo not found; install udev manually as root:" >&2
     echo "  install -m 0644 '$udev_src' '$udev_dst'" >&2

@@ -183,7 +183,7 @@ Several widget types have built-in touch behaviour that applies while the matchi
 | `show_seconds` | `false` | Show seconds |
 | `hour12` | not set | Overrides `settings.hour12` for this clock |
 | `label` | not set | Small caption, for example a city name |
-| `timezone` | not set | Accepted, but not applied in 1.0.0; clocks show local time |
+| `timezone` | not set | Accepted, but not applied yet; clocks show local time |
 
 ### metric
 
@@ -204,7 +204,7 @@ Download and upload speed (`net.down` and `net.up`).
 
 | Field | Default | Meaning |
 |---|---|---|
-| `interface` | not set | Accepted, but not applied in 1.0.0; the widget shows the sum of all interfaces except loopback |
+| `interface` | not set | Accepted, but not applied yet; the widget shows the sum of all interfaces except loopback |
 
 ### media
 
@@ -225,7 +225,7 @@ Built-in tap: the buttons skip back, play or pause, and skip forward; tapping th
 | Field | Default | Meaning |
 |---|---|---|
 | `show_value` | `true` | Show the percentage |
-| `step` | `5` | Accepted, but not used in 1.0.0 |
+| `step` | `5` | Accepted, but not used yet |
 
 Built-in touch: slide along the bar to set the volume; tap the speaker icon to mute or unmute. Uses `wpctl`.
 
@@ -246,7 +246,7 @@ Two rows of headlines from the feeds and webhooks configured in Studio.
 | Field | Default | Meaning |
 |---|---|---|
 | `font` | `"pixel"` | `pixel` (crisp bitmap font) or `smooth` |
-| `feeds` | `[]` | Feed ids. Accepted, but not applied in 1.0.0; the widget shows all enabled sources. |
+| `feeds` | `[]` | Feed ids. Accepted, but not applied yet; the widget shows all enabled sources. |
 
 Built-in touch: tap the left half to open the top headline, the right half for the bottom one; double tap left or right to step back or ahead a pair; hold to hide a headline.
 

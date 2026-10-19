@@ -1,6 +1,9 @@
 # Rust build output
 /target/
 
+# Release tarballs from packaging/scripts/build-release-tarball.sh
+/dist/
+
 # Arch packaging artifacts
 /packaging/arch/src/
 /packaging/arch/pkg/

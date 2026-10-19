@@ -2,6 +2,19 @@
 
 All notable changes to this project are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [semantic versioning](https://semver.org/).
 
+## [1.0.1] - 2026-10-19
+
+### Added
+
+- One-line installer: `curl -fsSL https://github.com/demoriaan/linexus/releases/latest/download/install.sh | bash`. It installs the Arch package where `pacman` exists and the prebuilt binaries in `~/.local/bin` elsewhere, checks the downloads against the checksum list of the release, and prints the steps that need root when it cannot ask for a password or runs with `--no-root`.
+- Every release carries an Arch Linux package, a tarball with x86_64 binaries for other distributions (glibc 2.35 or newer), the installer and `SHA256SUMS`, built by GitHub Actions.
+- [docs/ai-agents.md](docs/ai-agents.md): installing Linexus with a coding agent.
+- `install-dev.sh --bin-dir DIR` installs prebuilt binaries instead of building them.
+
+### Changed
+
+- `install-dev.sh` no longer stops when `udevadm` cannot reach udev, for example in a container.
+
 ## [1.0.0] - 2026-10-19
 
 First public release.

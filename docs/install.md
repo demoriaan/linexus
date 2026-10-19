@@ -42,13 +42,48 @@ Optional desktop tools. Without them only the matching features stop working; `l
 | `upower` | upower | Battery levels of wireless mice, keyboards and headsets |
 | `rocm-smi` | rocm-smi-lib | AMD GPU readings where sysfs does not provide them |
 
+## Quick install
+
+On x86_64 Linux, as your desktop user:
+
+```bash
+curl -fsSL https://github.com/demoriaan/linexus/releases/latest/download/install.sh | bash
+```
+
+The script fetches the files of the latest [release](https://github.com/demoriaan/linexus/releases) into `~/.cache/linexus/installer/<version>/` and checks them against the release's `SHA256SUMS`, which catches broken downloads. Then:
+
+- **With `pacman`** (Arch Linux and its derivatives) it installs the package from Option 1 with `sudo pacman -U`. After that it writes or upgrades your config and enables and starts `linexusd.service` for your user.
+- **Otherwise** it unpacks the prebuilt binaries and runs Option 2's `install-dev.sh --bin-dir` from inside them. That puts the programs in `~/.local/bin` and installs the udev rule through `sudo`. No Rust toolchain is needed.
+
+It ends with `linexusctl doctor`. Running it again is safe, for example to update to a new release. To pass options, download it first, or use `... | bash -s -- --help`:
+
+| Option | Effect |
+|---|---|
+| `--version X.Y.Z` | Install this release instead of the latest one |
+| `--method auto\|arch\|tarball` | `auto` picks `arch` when `pacman` exists |
+| `--from DIR` | Use release files already downloaded to `DIR` |
+| `--no-root` | Never call `sudo`; print the commands that need root instead |
+| `--no-start` | Enable the daemon, but do not start it now |
+| `--input-helper` | Also enable the input helper for keyboard shortcut and text actions |
+| `--uninstall` | Remove Linexus; your config stays |
+
+Exit codes: `0` done, `1` error, `2` unknown option, `3` root steps still open. With `3` it prints the commands that need root: with `--no-root`, or when `sudo` needs a password and there is no terminal to ask on. Run them, then run the installer again. On Arch nothing is installed until then, because the root step is the package itself. [ai-agents.md](ai-agents.md) describes the same flow for coding agents.
+
+The binaries in the tarball are built on Ubuntu 22.04 and need glibc 2.35 or newer. On derivatives whose glibc lags behind Arch, use `--method tarball`.
+
 ## Option 1: Arch Linux package
 
-From a checkout of this repository:
+Download `linexus-<version>-1-x86_64.pkg.tar.zst` from the [latest release](https://github.com/demoriaan/linexus/releases/latest) and install it:
+
+```bash
+sudo pacman -U linexus-*-x86_64.pkg.tar.zst
+```
+
+Or build it from a checkout of this repository:
 
 ```bash
 ./packaging/arch/build-local-package.sh
-sudo pacman -U packaging/arch/linexus-1.0.0-1-*.pkg.tar.zst
+sudo pacman -U packaging/arch/linexus-*-x86_64.pkg.tar.zst
 ```
 
 `build-local-package.sh` packs the committed state of the checkout (`git archive HEAD`) as a source tarball and runs `makepkg -f` with `packaging/arch/PKGBUILD`; uncommitted changes are not included. The build runs `cargo build --release --locked` and the full test suite (`cargo test --release --locked --workspace`). The package lands in `packaging/arch/`.
@@ -103,6 +138,7 @@ Without `--start`, the services are enabled but not started.
 |---|---|
 | `--no-udev` | Skip everything that needs `sudo` (udev rule, root input helper) |
 | `--no-build` | Reuse the binaries already in `target/release` |
+| `--bin-dir DIR` | Install prebuilt binaries from `DIR` instead of building; implies `--no-build`. The release tarball uses `--bin-dir bin`. |
 | `--no-config` | Do not create or upgrade the config |
 | `--no-enable` | Do not enable the user services |
 | `--start` | Start or restart the user services after installing |
@@ -225,6 +261,12 @@ Studio shows the same kind of checks under **Device > Setup checks**, each with 
 - **A second `linexusd`** cannot start while another one holds the device lock. The error names the lock file.
 
 ## Uninstall
+
+Installed with the quick install script, either way:
+
+```bash
+curl -fsSL https://github.com/demoriaan/linexus/releases/latest/download/install.sh | bash -s -- --uninstall
+```
 
 Installed with `install-dev.sh`:
 
