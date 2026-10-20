@@ -2,6 +2,27 @@
 
 All notable changes to this project are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Desktop notifications on the strip also come from GNOME apps (GApplication notifications) and from Flatpak apps through the notification portal, not only from apps that use libnotify.
+- Notifications on the strip show the app's icon, or the picture the notification carries (a contact photo, for example), instead of a bell.
+
+### Changed
+
+- Notifications on the strip follow the desktop's notification settings: Do Not Disturb (only critical notifications, and on KDE Plasma the apps allowed during it), apps whose popups are turned off, and low-urgency notifications (never on GNOME, as set on Plasma). A notification that asks for less time than the configured duration leaves sooner, and an update of a notification replaces the one on the strip instead of queueing behind it.
+- The daemon follows the session bus with `busctl` (systemd), which every supported system has, instead of `dbus-monitor`, and only while notifications are turned on.
+- **Never show from** also matches an app's menu name and desktop file id.
+- **Hide message text** also hides the notification's picture; the app's icon stays.
+- A full queue of overlays drops its oldest entry instead of the newest, and a notification that keeps updating stays up at most twice the configured time.
+- A failing command widget shows `! ` instead of `⚠ ` before the error, since the strip's font has no warning sign.
+
+### Fixed
+
+- Emoji the strip's font lacks are left out instead of being drawn as boxes, common symbols get ASCII stand-ins (`→` as `->`, `E♭` as `Eb`, `★` as `*`), and missing spaces (thin or narrow no-break spaces) are drawn as spaces. Letters the font lacks still show a box, and a letter written with a separate accent mark (as in macOS file names) is drawn as the composed letter.
+- SVG images on the strip (app icons, notification icons, images in pages) never read files they point to, so an icon cannot make the daemon read a pipe or a device.
+
 ## [1.1.0] - 2026-10-20
 
 ### Added

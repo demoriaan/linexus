@@ -38,7 +38,19 @@ pub fn list_applications() -> Vec<AppEntry> {
         .into_iter()
         .map(|dir| dir.join("applications"))
         .collect();
-    list_applications_in(&dirs, &locale_candidates(), &current_desktops())
+    list_applications_in(&dirs, &locale_candidates(), Some(&current_desktops()))
+}
+
+/// Every installed application entry, including those kept out of menus
+/// (`NoDisplay`, `OnlyShowIn` another desktop), such as the helpers that
+/// send notifications. Deleted (`Hidden`) entries and those whose `TryExec`
+/// program is missing are left out, as in [`list_applications`].
+pub fn list_desktop_entries() -> Vec<AppEntry> {
+    let dirs: Vec<PathBuf> = data_dirs()
+        .into_iter()
+        .map(|dir| dir.join("applications"))
+        .collect();
+    list_applications_in(&dirs, &locale_candidates(), None)
 }
 
 /// Basenames of the programs the current user is running: the executable
@@ -165,7 +177,13 @@ impl DesktopEntry {
     }
 }
 
-fn list_applications_in(dirs: &[PathBuf], locale: &[String], desktops: &[String]) -> Vec<AppEntry> {
+/// `desktops`: the current desktop names, to list only what its menu shows;
+/// None lists every application entry.
+fn list_applications_in(
+    dirs: &[PathBuf],
+    locale: &[String],
+    desktops: Option<&[String]>,
+) -> Vec<AppEntry> {
     let mut seen = HashSet::new();
     let mut apps = Vec::new();
     for dir in dirs {
@@ -182,7 +200,11 @@ fn list_applications_in(dirs: &[PathBuf], locale: &[String], desktops: &[String]
             else {
                 continue;
             };
-            if !entry.shown_on(desktops) {
+            let listed = match desktops {
+                Some(desktops) => entry.shown_on(desktops),
+                None => entry.kind == "Application" && !entry.hidden,
+            };
+            if !listed {
                 continue;
             }
             if entry
@@ -745,7 +767,7 @@ fn user_icon_theme() -> Option<String> {
         .and_then(|text| ini_value(&text, "Settings", "gtk-icon-theme-name"))
 }
 
-fn ini_value(text: &str, section: &str, key: &str) -> Option<String> {
+pub(crate) fn ini_value(text: &str, section: &str, key: &str) -> Option<String> {
     let header = format!("[{section}]");
     let mut in_section = false;
     for line in text.lines() {
@@ -1016,8 +1038,23 @@ Exec=konsole --new-window
         );
         write(&system.join("readme.txt"), "not an entry");
 
-        let apps = list_applications_in(&[user, system], &[], &["KDE".into()]);
+        let dirs = [user, system];
+        let apps = list_applications_in(&dirs, &[], Some(&["KDE".into()]));
+        let all = list_applications_in(&dirs, &[], None);
         let _ = fs::remove_dir_all(&root);
+
+        let all_ids: Vec<_> = all.iter().map(|app| app.id.as_str()).collect();
+        assert_eq!(
+            all_ids,
+            vec![
+                "editor.desktop",
+                "gnome.desktop",
+                "kde.desktop",
+                "nodisplay.desktop",
+                "notkde.desktop",
+                "kde4-old.desktop",
+            ]
+        );
 
         let ids: Vec<_> = apps.iter().map(|app| app.id.as_str()).collect();
         assert_eq!(

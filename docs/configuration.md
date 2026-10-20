@@ -92,10 +92,18 @@ Lock detection asks logind for the `LockedHint` of the session in the daemon's `
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `enabled` | boolean | `false` | Show desktop notifications on the strip. Needs `dbus-monitor`. |
-| `duration_ms` | number | `6000` | How long a notification stays; at least 1500 ms are used |
-| `muted_apps` | array of strings | `[]` | Application names that never show; compared without regard to case |
-| `private` | boolean | `false` | Show only the application name, not the text |
+| `enabled` | boolean | `false` | Show desktop notifications on the strip. Needs `busctl` (systemd). |
+| `duration_ms` | number | `6000` | How long a notification stays at most; shorter when the app asks for less, and at least 1500 ms |
+| `muted_apps` | array of strings | `[]` | Applications that never show: the name the app sends, its menu name or its desktop file id; compared without regard to case |
+| `private` | boolean | `false` | Show only the application's name and icon, not the text or the notification's picture |
+
+The strip shows a notification when the desktop would pop it up too, following the desktop's own notification settings:
+
+- **GNOME:** Do Not Disturb and an app's "pop-up banners" switch let only critical notifications through, an app with notifications turned off shows none, and low-urgency notifications never appear.
+- **KDE Plasma:** Do Not Disturb lets through critical notifications (unless Plasma is set otherwise) and the apps allowed during it. An app whose popups are turned off shows none, and low-priority notifications appear only when Plasma shows them as popups.
+- **Other desktops:** Do Not Disturb counts where the notification server reports it.
+
+Notification text is cut to 1024 characters. A picture sent inline with more than 256 KiB of pixel data (about 256 x 256 pixels) is left out; the notification still shows.
 
 `overlays`:
 

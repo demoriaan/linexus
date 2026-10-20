@@ -1,14 +1,26 @@
-//! Mirrors desktop notifications onto the panel by watching the session
-//! bus with `dbus-monitor`, so no D-Bus library is needed.
+//! Mirrors desktop notifications onto the panel by following the session
+//! bus with `busctl --user monitor`, so no D-Bus library is needed. busctl
+//! prints every message as one line of JSON with typed values.
 //!
-//! dbus-monitor prints strings raw: quotes inside them are not escaped and
-//! line breaks are literal. A `Notify` call always has the same eight
-//! arguments, so the parser anchors on the structure around the strings
-//! (the `uint32` id after the app name; the two arrays and the closing
-//! `int32` timeout after the body) and lets the body absorb anything odd.
+//! Apps hand a notification to the desktop in one of three calls:
+//! - `org.freedesktop.Notifications.Notify`: libnotify, KDE and most apps;
+//! - `org.gtk.Notifications.AddNotification`: GApplication apps on GNOME;
+//! - `org.freedesktop.impl.portal.Notification.AddNotification`: the
+//!   notification portal (Flatpak apps) passing one on to the desktop.
+//!
+//! One notification can pass through two of them (the portal hands it on to
+//! GNOME Shell or Plasma), so the same app sending the same text again
+//! within a few seconds is dropped.
 
-use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader};
+mod policy;
+#[cfg(test)]
+mod tests;
+
+pub use policy::PopupPolicy;
+
+use serde_json::Value;
+use std::collections::{HashSet, VecDeque};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,142 +29,404 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const MATCH_RULE: &str =
-    "type='method_call',interface='org.freedesktop.Notifications',member='Notify'";
-/// Restart delays after dbus-monitor exits; reset once a run lasted a minute.
+const MATCH_RULES: [&str; 3] = [
+    "type='method_call',interface='org.freedesktop.Notifications',member='Notify'",
+    "type='method_call',interface='org.gtk.Notifications',member='AddNotification'",
+    "type='method_call',interface='org.freedesktop.impl.portal.Notification',member='AddNotification'",
+];
+/// Restart delays after busctl exits; reset once a run lasted a minute.
 const BACKOFF_START: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
-/// Text kept per message; beyond this only structural lines are stored
-/// (inline images in hints print as huge hex dumps).
-const MAX_BLOCK_BYTES: usize = 1 << 20;
+/// Longer lines are skipped without being parsed.
+const MAX_LINE_BYTES: u64 = 16 << 20;
+/// Byte arrays longer than this (inline images, about 256 x 256 RGBA) are
+/// emptied before a line is parsed: as JSON values every byte would take 32
+/// bytes of memory. The notification itself still shows, just without them.
+const MAX_BYTE_ARRAY: usize = 256 * 256 * 4;
+/// Lines with more JSON values than this (outside byte arrays) are dropped
+/// unparsed: a hint of a million empty strings or tiny arrays would take
+/// hundreds of megabytes as JSON values. Real notifications have a few
+/// dozen.
+const MAX_JSON_VALUES: usize = 65_536;
+/// The same text again within this window is one notification passed on.
+const REPEAT_WINDOW: Duration = Duration::from_secs(3);
+/// Remembered GApplication notification ids, to spot updates.
+const MAX_REMEMBERED_IDS: usize = 512;
+/// Text kept per notification; the strip shows one line of it. Markup is
+/// removed from at most four times as much.
+const MAX_NAME_CHARS: usize = 128;
+const MAX_PATH_CHARS: usize = 4096;
+const MAX_SUMMARY_CHARS: usize = 256;
+const MAX_BODY_CHARS: usize = 1024;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Urgency {
+    Low,
+    #[default]
+    Normal,
+    Critical,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotificationIcon {
+    /// Icon theme name, absolute path or `file://` URL.
+    Named(String),
+    /// Contents of an image file (PNG, JPEG, SVG).
+    Encoded(Vec<u8>),
+    /// Straight RGBA pixels of an inline image.
+    Pixels {
+        width: u32,
+        height: u32,
+        rgba: Vec<u8>,
+    },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Notification {
+    /// What the sender calls itself: the `app_name` of a `Notify` call or
+    /// the application id.
     pub app_name: String,
+    /// Desktop file id without `.desktop`, when the sender names one.
+    pub desktop_entry: Option<String>,
+    /// KDE notification service (`x-kde-appname`), whose settings Plasma
+    /// keeps apart from the app's.
+    pub kde_service: Option<String>,
     pub summary: String,
     /// Plain text; the markup notifications may use is removed.
     pub body: String,
-    /// Icon name or `file://` URL as sent; may be empty.
-    pub icon: String,
+    /// A picture of the notification's own, such as a contact photo.
+    pub image: Option<NotificationIcon>,
+    /// Icons of the sending app, best first.
+    pub app_icons: Vec<NotificationIcon>,
+    pub urgency: Urgency,
+    /// How long the sender wants it shown, when it sets a limit.
+    pub timeout: Option<Duration>,
+    /// It updates an earlier notification of the same app.
+    pub replaces: bool,
 }
 
-/// Every `Notify` call in a chunk of dbus-monitor output.
-pub fn parse_dbus_monitor(text: &str) -> Vec<Notification> {
-    let mut parser = NotifyParser::default();
-    let mut out: Vec<Notification> = text
-        .split('\n')
-        .filter_map(|line| parser.push_line(line))
-        .collect();
-    out.extend(parser.finish());
-    out
-}
-
-/// Line-by-line parser that emits a notification as soon as its final
-/// argument arrives, rather than waiting for the next bus message.
+/// Turns `busctl monitor --json=short` lines into notifications.
 #[derive(Debug, Default)]
-struct NotifyParser {
-    block: Option<Vec<String>>,
-    block_bytes: usize,
+struct MonitorParser {
+    /// (app id, notification id) of GApplication and portal notifications.
+    seen_ids: HashSet<(String, String)>,
+    /// App and text of recent notifications, to drop one passed on.
+    recent: VecDeque<(Instant, String)>,
 }
 
-impl NotifyParser {
-    fn push_line(&mut self, line: &str) -> Option<Notification> {
-        let line = line.strip_suffix('\r').unwrap_or(line);
-        if is_message_header(line) {
-            let previous = self.finish();
-            if line.starts_with("method call ")
-                && line.contains("interface=org.freedesktop.Notifications;")
-                && line.ends_with("member=Notify")
-            {
-                self.block = Some(Vec::new());
-                self.block_bytes = 0;
+impl MonitorParser {
+    fn push_line(&mut self, line: &str, now: Instant) -> Option<Notification> {
+        let message: Value = serde_json::from_str(&shrink_line(line)?).ok()?;
+        if message.get("type")?.as_str()? != "method_call" {
+            return None;
+        }
+        let interface = message.get("interface")?.as_str()?;
+        let member = message.get("member")?.as_str()?;
+        let data = message.get("payload")?.get("data")?.as_array()?;
+        let notification = match (interface, member) {
+            ("org.freedesktop.Notifications", "Notify") => from_notify(data)?,
+            (
+                "org.gtk.Notifications" | "org.freedesktop.impl.portal.Notification",
+                "AddNotification",
+            ) => {
+                let (mut notification, key) = from_add_notification(data)?;
+                if self.seen_ids.len() >= MAX_REMEMBERED_IDS {
+                    self.seen_ids.clear();
+                }
+                notification.replaces = !self.seen_ids.insert(key);
+                notification
             }
-            return previous;
+            _ => return None,
+        };
+        if notification.summary.is_empty() && notification.body.is_empty() {
+            return None;
         }
-        let block = self.block.as_mut()?;
-        if self.block_bytes < MAX_BLOCK_BYTES || is_top_level(line) {
-            self.block_bytes += line.len() + 1;
-            block.push(line.to_string());
+        while self
+            .recent
+            .front()
+            .is_some_and(|(at, _)| now.saturating_duration_since(*at) > REPEAT_WINDOW)
+        {
+            self.recent.pop_front();
         }
-        if is_top_level(line) && line.starts_with("   int32 ") {
-            if let Some(notification) = parse_notify_args(block) {
-                self.block = None;
-                return Some(notification);
-            }
+        // The portal and the desktop call the app by its id on both legs.
+        let app = notification
+            .desktop_entry
+            .as_deref()
+            .unwrap_or(&notification.app_name)
+            .to_lowercase();
+        let key = format!("{app}\n{}\n{}", notification.summary, notification.body);
+        if self.recent.iter().any(|(_, seen)| *seen == key) {
+            return None;
         }
-        None
-    }
-
-    /// Ends the pending message (stream closed or next header seen).
-    fn finish(&mut self) -> Option<Notification> {
-        self.block
-            .take()
-            .and_then(|block| parse_notify_args(&block))
+        self.recent.push_back((now, key));
+        Some(notification)
     }
 }
 
-fn is_message_header(line: &str) -> bool {
-    ["method call ", "method return ", "signal ", "error "]
+/// `Notify(app_name, replaces_id, app_icon, summary, body, actions, hints,
+/// expire_timeout)`.
+fn from_notify(data: &[Value]) -> Option<Notification> {
+    let [app_name, replaces_id, app_icon, summary, body, _actions, hints, timeout] = data else {
+        return None;
+    };
+    let hint = |key: &str| hints.get(key).and_then(|hint| hint.get("data"));
+    let hint_text = |key: &str, max: usize| {
+        hint(key)
+            .and_then(Value::as_str)
+            .map(|text| clip(text, max))
+            .and_then(non_empty)
+    };
+    // An icon name stands for the app. A file can be anything, a contact
+    // photo included (browsers pass a web notification's icon as a file in
+    // `app_icon`), so it counts as the notification's own picture.
+    let image_path = ["image-path", "image_path"]
         .iter()
-        .any(|prefix| line.starts_with(prefix) && line.contains(" time="))
-}
-
-/// Arguments sit at three spaces; nested values are indented further.
-fn is_top_level(line: &str) -> bool {
-    line.len() > 3 && line.starts_with("   ") && !line[3..].starts_with(' ')
-}
-
-/// `lines` are everything after the header: string app_name, uint32
-/// replaces_id, string icon, string summary, string body, array actions,
-/// array hints, int32 timeout.
-fn parse_notify_args(lines: &[String]) -> Option<Notification> {
-    let last = lines.len().checked_sub(1)?;
-    if !(is_top_level(&lines[last]) && lines[last].starts_with("   int32 ")) {
-        return None;
-    }
-    // From the end: hints array, then actions array.
-    let hints_end = last.checked_sub(1).filter(|&idx| lines[idx] == "   ]")?;
-    let hints_start = (0..hints_end)
-        .rev()
-        .find(|&idx| lines[idx] == "   array [")?;
-    let actions_end = hints_start
-        .checked_sub(1)
-        .filter(|&idx| lines[idx] == "   ]")?;
-    let actions_start = (0..actions_end)
-        .rev()
-        .find(|&idx| lines[idx] == "   array [")?;
-    // From the start: app name up to the replaces_id.
-    let id_line = (1..actions_start).find(|&idx| {
-        lines[idx]
-            .strip_prefix("   uint32 ")
-            .is_some_and(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
-    })?;
-    let app_name = string_value(&lines[..id_line])?;
-    // Icon, summary, body: split where a new top-level string starts; extra
-    // splits (a body line that looks like one) are folded back into the body.
-    let middle = &lines[id_line + 1..actions_start];
-    let starts: Vec<usize> = (0..middle.len())
-        .filter(|&idx| middle[idx].starts_with("   string \""))
-        .collect();
-    if starts.len() < 3 || starts[0] != 0 {
-        return None;
-    }
-    let icon = string_value(&middle[starts[0]..starts[1]])?;
-    let summary = string_value(&middle[starts[1]..starts[2]])?;
-    let body = string_value(&middle[starts[2]..])?;
+        .find_map(|key| hint_text(key, MAX_PATH_CHARS));
+    let app_icon = app_icon
+        .as_str()
+        .map(|icon| clip(icon, MAX_PATH_CHARS))
+        .and_then(non_empty);
+    let (files, names): (Vec<String>, Vec<String>) = image_path
+        .into_iter()
+        .chain(app_icon)
+        .partition(|icon| icon.contains('/'));
+    let image = ["image-data", "image_data", "icon_data"]
+        .iter()
+        .find_map(|key| hint(key).and_then(inline_image))
+        .or_else(|| files.into_iter().next().map(NotificationIcon::Named));
+    let urgency = match hint("urgency").and_then(Value::as_u64) {
+        Some(0) => Urgency::Low,
+        Some(2) => Urgency::Critical,
+        _ => Urgency::Normal,
+    };
     Some(Notification {
-        app_name: app_name.trim().to_string(),
-        summary: summary.trim().to_string(),
-        body: strip_markup(&body).trim().to_string(),
-        icon: icon.trim().to_string(),
+        app_name: clip(app_name.as_str()?, MAX_NAME_CHARS).trim().to_string(),
+        desktop_entry: hint_text("desktop-entry", MAX_NAME_CHARS)
+            .map(|entry| entry.trim_end_matches(".desktop").to_string()),
+        kde_service: hint_text("x-kde-appname", MAX_NAME_CHARS),
+        summary: clip(summary.as_str()?, MAX_SUMMARY_CHARS)
+            .trim()
+            .to_string(),
+        body: plain_body(body.as_str()?),
+        image,
+        app_icons: names.into_iter().map(NotificationIcon::Named).collect(),
+        urgency,
+        timeout: timeout
+            .as_i64()
+            .filter(|&ms| ms > 0)
+            .map(|ms| Duration::from_millis(ms.unsigned_abs())),
+        replaces: replaces_id.as_u64().is_some_and(|id| id != 0),
     })
 }
 
-/// `   string "…"` possibly spanning several lines.
-fn string_value(lines: &[String]) -> Option<String> {
-    let joined = lines.join("\n");
-    let value = joined.strip_prefix("   string \"")?;
-    Some(value.strip_suffix('"').unwrap_or(value).to_string())
+/// `AddNotification(app_id, id, fields)` of GApplication and the portal;
+/// also returns the key that identifies the notification for updates.
+fn from_add_notification(data: &[Value]) -> Option<(Notification, (String, String))> {
+    let [app_id, id, fields] = data else {
+        return None;
+    };
+    let app_id = clip(app_id.as_str()?, MAX_NAME_CHARS).trim();
+    let id = clip(id.as_str()?, MAX_NAME_CHARS);
+    let field = |key: &str| fields.get(key).and_then(|field| field.get("data"));
+    let body = match field("markup-body").and_then(Value::as_str) {
+        Some(markup) => plain_body(markup),
+        None => {
+            let body = field("body").and_then(Value::as_str).unwrap_or_default();
+            clip(body, MAX_BODY_CHARS).trim().to_string()
+        }
+    };
+    let urgency = match field("priority").and_then(Value::as_str) {
+        Some("low") => Urgency::Low,
+        Some("urgent") => Urgency::Critical,
+        Some(_) => Urgency::Normal,
+        None if field("urgent").and_then(Value::as_bool) == Some(true) => Urgency::Critical,
+        None => Urgency::Normal,
+    };
+    // A themed icon names the app's icon; a file or image data is a picture
+    // of the notification's own.
+    let (image, app_icons) = match field("icon").map(serialized_icon) {
+        Some(icons) if matches!(icons.first(), Some(NotificationIcon::Named(name)) if !name.contains('/')) => {
+            (None, icons)
+        }
+        Some(mut icons) if !icons.is_empty() => (Some(icons.remove(0)), Vec::new()),
+        _ => (None, Vec::new()),
+    };
+    let notification = Notification {
+        app_name: app_id.to_string(),
+        desktop_entry: non_empty(app_id),
+        kde_service: None,
+        summary: field("title")
+            .and_then(Value::as_str)
+            .map(|title| clip(title, MAX_SUMMARY_CHARS).trim().to_string())
+            .unwrap_or_default(),
+        body,
+        image,
+        app_icons,
+        urgency,
+        timeout: None,
+        replaces: false,
+    };
+    Some((notification, (app_id.to_string(), id.to_string())))
+}
+
+/// A serialized GIcon: `("themed", ["name", …])`, `("file", "file:///…")`,
+/// `("bytes", [..])` or a bare icon name. Symbolic names come last, since
+/// they draw as a flat silhouette.
+fn serialized_icon(value: &Value) -> Vec<NotificationIcon> {
+    if let Some(name) = value.as_str().and_then(non_empty) {
+        return vec![NotificationIcon::Named(name)];
+    }
+    let Some([kind, inner]) = value.as_array().map(Vec::as_slice) else {
+        return Vec::new();
+    };
+    let Some(inner) = inner.get("data") else {
+        return Vec::new();
+    };
+    match kind.as_str() {
+        Some("themed") => {
+            let mut names: Vec<String> = inner
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|name| non_empty(clip(name.as_str()?, MAX_PATH_CHARS)))
+                .filter(|name| !name.contains('/'))
+                .collect();
+            names.sort_by_key(|name| name.ends_with("-symbolic"));
+            names.into_iter().map(NotificationIcon::Named).collect()
+        }
+        Some("file") => inner
+            .as_str()
+            .and_then(non_empty)
+            .filter(|path| path.contains('/'))
+            .map(NotificationIcon::Named)
+            .into_iter()
+            .collect(),
+        Some("bytes") => bytes(inner)
+            .filter(|bytes| !bytes.is_empty())
+            .map(NotificationIcon::Encoded)
+            .into_iter()
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The `image-data` hint: `(width, height, rowstride, has_alpha,
+/// bits_per_sample, channels, data)`, 8-bit RGB or RGBA rows.
+fn inline_image(value: &Value) -> Option<NotificationIcon> {
+    let [width, height, stride, _alpha, bits, channels, data] = value.as_array()?.as_slice() else {
+        return None;
+    };
+    let width = usize::try_from(width.as_u64()?).ok()?;
+    let height = usize::try_from(height.as_u64()?).ok()?;
+    let stride = usize::try_from(stride.as_u64()?).ok()?;
+    let channels = usize::try_from(channels.as_u64()?).ok()?;
+    let row = width.checked_mul(channels)?;
+    if bits.as_u64()? != 8 || !(channels == 3 || channels == 4) || width == 0 || height == 0 {
+        return None;
+    }
+    let data = bytes(data)?;
+    let needed = stride.checked_mul(height - 1)?.checked_add(row)?;
+    if stride < row || data.len() < needed {
+        return None;
+    }
+    let mut rgba = Vec::with_capacity(width.checked_mul(height)?.checked_mul(4)?);
+    for line in 0..height {
+        for px in data[line * stride..line * stride + row].chunks_exact(channels) {
+            rgba.extend_from_slice(&px[..3]);
+            rgba.push(if channels == 4 { px[3] } else { 255 });
+        }
+    }
+    Some(NotificationIcon::Pixels {
+        width: u32::try_from(width).ok()?,
+        height: u32::try_from(height).ok()?,
+        rgba,
+    })
+}
+
+fn bytes(value: &Value) -> Option<Vec<u8>> {
+    value
+        .as_array()?
+        .iter()
+        .map(|byte| u8::try_from(byte.as_u64()?).ok())
+        .collect()
+}
+
+fn non_empty(text: &str) -> Option<String> {
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_string())
+}
+
+/// At most the first `max` characters of `text`.
+fn clip(text: &str, max: usize) -> &str {
+    text.char_indices()
+        .nth(max)
+        .map_or(text, |(end, _)| &text[..end])
+}
+
+/// A body as plain text: markup removed from a bounded prefix, then cut to
+/// what is kept.
+fn plain_body(markup: &str) -> String {
+    let plain = strip_markup(clip(markup, MAX_BODY_CHARS * 4));
+    clip(plain.trim(), MAX_BODY_CHARS).trim().to_string()
+}
+
+/// `line` ready to parse: every JSON array of more than [`MAX_BYTE_ARRAY`]
+/// plain numbers (outside strings) replaced by `[]`. None when the rest
+/// holds more than [`MAX_JSON_VALUES`] values.
+fn shrink_line(line: &str) -> Option<std::borrow::Cow<'_, str>> {
+    let bytes = line.as_bytes();
+    let mut out: Option<String> = None;
+    let mut copied = 0;
+    let mut in_string = false;
+    // Commas and openings outside strings; a kept byte array counts once.
+    let mut values = 0usize;
+    // Bytes in kept byte arrays: one picture's worth per line, so many
+    // arrays just under the limit cannot add up.
+    let mut kept_bytes = 0usize;
+    let mut idx = 0;
+    while idx < bytes.len() {
+        match bytes[idx] {
+            b'\\' if in_string => idx += 1,
+            b'"' => in_string = !in_string,
+            b',' | b'{' if !in_string => values += 1,
+            b'[' if !in_string => {
+                values += 1;
+                let mut end = idx + 1;
+                let mut commas = 0;
+                while end < bytes.len() && matches!(bytes[end], b'0'..=b'9' | b',' | b' ' | b'-') {
+                    commas += usize::from(bytes[end] == b',');
+                    end += 1;
+                }
+                let numbers = end < bytes.len() && bytes[end] == b']';
+                if numbers && kept_bytes + commas >= MAX_BYTE_ARRAY {
+                    let out = out.get_or_insert_with(|| String::with_capacity(line.len() / 4));
+                    out.push_str(&line[copied..idx]);
+                    out.push_str("[]");
+                    copied = end + 1;
+                    idx = end;
+                } else if numbers {
+                    kept_bytes += commas + 1;
+                    idx = end;
+                } else {
+                    // Not a byte array: its commas count one by one.
+                    idx = end - 1;
+                    values += commas;
+                }
+            }
+            _ => {}
+        }
+        if values > MAX_JSON_VALUES {
+            return None;
+        }
+        idx += 1;
+    }
+    Some(match out {
+        Some(mut out) => {
+            out.push_str(&line[copied..]);
+            out.into()
+        }
+        None => line.into(),
+    })
 }
 
 /// Removes the tags the notification spec allows (`b`, `i`, `u`, `a`, `img`)
@@ -177,14 +451,16 @@ fn strip_markup(text: &str) -> String {
         let next = name_start[name.len()..].chars().next();
         let is_tag =
             TAGS.contains(&name.as_str()) && matches!(next, Some('>' | '/' | ' ' | '\t' | '\n'));
-        match (is_tag, after.find('>')) {
-            (true, Some(end)) => {
+        // Only a known tag looks for its end, so text full of `<` stays
+        // linear.
+        match is_tag.then(|| after.find('>')).flatten() {
+            Some(end) => {
                 if name == "br" || (name == "p" && !after.starts_with('/') && !out.is_empty()) {
                     out.push('\n');
                 }
                 rest = &after[end + 1..];
             }
-            _ => {
+            None => {
                 out.push('<');
                 rest = after;
             }
@@ -200,7 +476,9 @@ fn decode_entities(text: &str) -> String {
     while let Some(start) = rest.find('&') {
         out.push_str(&rest[..start]);
         let after = &rest[start..];
-        let end = after.find(';').filter(|&end| end <= 10);
+        // Entities are short; looking further would make text full of `&`
+        // quadratic.
+        let end = after.bytes().take(11).position(|byte| byte == b';');
         let decoded = end.and_then(|end| {
             let entity = &after[1..end];
             match entity {
@@ -234,7 +512,7 @@ fn decode_entities(text: &str) -> String {
     out
 }
 
-/// Keeps a `dbus-monitor` child running and turns its output into
+/// Keeps a `busctl monitor` child running and turns its output into
 /// [`Notification`]s. Dropping the monitor stops the child and the reader.
 pub struct NotificationMonitor {
     stop: Arc<AtomicBool>,
@@ -242,11 +520,11 @@ pub struct NotificationMonitor {
 }
 
 impl NotificationMonitor {
-    /// Starts watching, or None when dbus-monitor is not installed. If the
-    /// child dies (session bus restart), it is restarted after 1 s, doubling
-    /// up to 60 s while it keeps failing.
+    /// Starts watching, or None when busctl (systemd) is not installed. If
+    /// the child dies (session bus restart), it is restarted after 1 s,
+    /// doubling up to 60 s while it keeps failing.
     pub fn start() -> Option<(NotificationMonitor, Receiver<Notification>)> {
-        Self::start_with(crate::which("dbus-monitor")?)
+        Self::start_with(crate::which("busctl")?)
     }
 
     fn start_with(program: PathBuf) -> Option<(NotificationMonitor, Receiver<Notification>)> {
@@ -287,6 +565,7 @@ fn supervise(
     tx: &Sender<Notification>,
 ) {
     let mut backoff = BACKOFF_START;
+    let mut parser = MonitorParser::default();
     loop {
         let started = Instant::now();
         // Spawning under the lock pairs with Drop: either Drop sees this
@@ -307,7 +586,7 @@ fn supervise(
                 None => None,
             }
         };
-        let receiver_gone = stdout.is_some_and(|stdout| !forward(stdout, tx));
+        let receiver_gone = stdout.is_some_and(|stdout| !forward(stdout, &mut parser, tx));
         if let Some(mut child) = slot
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -330,8 +609,12 @@ fn supervise(
 }
 
 fn spawn_monitor(program: &Path) -> Option<Child> {
-    Command::new(program)
-        .args(["--session", "--monitor", MATCH_RULE])
+    let mut command = Command::new(program);
+    command.args(["--user", "monitor", "--json=short"]);
+    for rule in MATCH_RULES {
+        command.arg(format!("--match={rule}"));
+    }
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -340,19 +623,32 @@ fn spawn_monitor(program: &Path) -> Option<Child> {
 }
 
 /// Reads until the child's output ends. False when the receiver was dropped.
-fn forward(stdout: std::process::ChildStdout, tx: &Sender<Notification>) -> bool {
+fn forward(
+    stdout: std::process::ChildStdout,
+    parser: &mut MonitorParser,
+    tx: &Sender<Notification>,
+) -> bool {
     let mut reader = BufReader::new(stdout);
-    let mut parser = NotifyParser::default();
     let mut raw = Vec::new();
     loop {
         raw.clear();
-        match reader.read_until(b'\n', &mut raw) {
+        match reader
+            .by_ref()
+            .take(MAX_LINE_BYTES)
+            .read_until(b'\n', &mut raw)
+        {
             Ok(0) | Err(_) => return true,
             Ok(_) => {}
         }
+        if raw.last() != Some(&b'\n') && raw.len() as u64 >= MAX_LINE_BYTES {
+            // Too long to parse: skip the rest of the line.
+            if reader.skip_until(b'\n').is_err() {
+                return true;
+            }
+            continue;
+        }
         let line = String::from_utf8_lossy(&raw);
-        let line = line.strip_suffix('\n').unwrap_or(&line);
-        if let Some(notification) = parser.push_line(line) {
+        if let Some(notification) = parser.push_line(line.trim_end(), Instant::now()) {
             if tx.send(notification).is_err() {
                 return false;
             }
@@ -369,164 +665,4 @@ fn sleep_unless_stopped(duration: Duration, stop: &AtomicBool) -> bool {
         thread::sleep(Duration::from_millis(100));
     }
     !stop.load(Ordering::SeqCst)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Captured from dbus-monitor on a private bus, with a notify-send style
-    /// hint block.
-    const CAPTURE: &str = r#"signal time=1792371935.587466 sender=org.freedesktop.DBus -> destination=:1.0 serial=2 path=/org/freedesktop/DBus; interface=org.freedesktop.DBus; member=NameAcquired
-   string ":1.0"
-method call time=1792371936.097278 sender=:1.1 -> destination=org.example.NoSuchNotifier serial=2 path=/org/freedesktop/Notifications; interface=org.freedesktop.Notifications; member=Notify
-   string "my "app""
-   uint32 0
-   string "dialog-information"
-   string "Sum "quoted" mary"
-   string "Line one <b>bold</b> &amp; more
-   string "fake"
-Line three \" back"
-   array [
-      string "default"
-      string "Open"
-   ]
-   array [
-      dict entry(
-         string "urgency"
-         variant             byte 1
-      )
-      dict entry(
-         string "sender-pid"
-         variant             int64 4242
-      )
-   ]
-   int32 -1
-method call time=1792371936.099978 sender=:1.2 -> destination=org.example.NoSuchNotifier serial=2 path=/org/freedesktop/Notifications; interface=org.freedesktop.Notifications; member=Notify
-   string "second"
-   uint32 7
-   string ""
-   string "S2"
-   string ""
-   array [
-   ]
-   array [
-   ]
-   int32 5000
-"#;
-
-    #[test]
-    fn parses_notify_calls_with_raw_quotes_and_newlines() {
-        let notifications = parse_dbus_monitor(CAPTURE);
-        assert_eq!(notifications.len(), 2);
-        assert_eq!(
-            notifications[0],
-            Notification {
-                app_name: "my \"app\"".into(),
-                summary: "Sum \"quoted\" mary".into(),
-                body: "Line one bold & more\n   string \"fake\"\nLine three \\\" back".into(),
-                icon: "dialog-information".into(),
-            }
-        );
-        assert_eq!(
-            notifications[1],
-            Notification {
-                app_name: "second".into(),
-                summary: "S2".into(),
-                body: String::new(),
-                icon: String::new(),
-            }
-        );
-    }
-
-    #[test]
-    fn emits_as_soon_as_the_timeout_argument_arrives() {
-        let mut parser = NotifyParser::default();
-        let mut emitted = Vec::new();
-        for line in CAPTURE.lines() {
-            if let Some(notification) = parser.push_line(line) {
-                emitted.push(notification.app_name);
-            }
-        }
-        // Both arrive on their `int32` line; nothing is left pending.
-        assert_eq!(emitted, vec!["my \"app\"", "second"]);
-        assert_eq!(parser.finish(), None);
-    }
-
-    #[test]
-    fn a_body_line_that_looks_like_the_timeout_does_not_end_the_message() {
-        let text = "method call time=1.0 sender=:1.5 -> destination=:1.6 serial=3 path=/org/freedesktop/Notifications; interface=org.freedesktop.Notifications; member=Notify
-   string \"app\"
-   uint32 0
-   string \"\"
-   string \"Title\"
-   string \"first
-   int32 5
-last\"
-   array [
-   ]
-   array [
-   ]
-   int32 -1
-";
-        let notifications = parse_dbus_monitor(text);
-        assert_eq!(notifications.len(), 1);
-        assert_eq!(notifications[0].body, "first\n   int32 5\nlast");
-    }
-
-    #[test]
-    fn ignores_other_messages_and_truncated_input() {
-        assert!(parse_dbus_monitor("signal time=1.0 sender=x -> destination=y serial=1 path=/; interface=a; member=b\n   string \"x\"\n").is_empty());
-        let truncated = CAPTURE.split("   array [").next().unwrap();
-        assert!(parse_dbus_monitor(truncated)
-            .iter()
-            .all(|n| n.app_name != "my \"app\""));
-    }
-
-    #[test]
-    fn strips_notification_markup() {
-        assert_eq!(
-            strip_markup("<b>Bold</b> <i>it</i> <a href=\"https://x.test\">link</a><br/>next"),
-            "Bold it link\nnext"
-        );
-        assert_eq!(strip_markup("a < b and c > d"), "a < b and c > d");
-        assert_eq!(strip_markup("<img src=\"x.png\" alt=\"\"/>text"), "text");
-        assert_eq!(
-            strip_markup("&lt;tag&gt; &#228;&#xE4; &bogus; AT&T"),
-            "<tag> ää &bogus; AT&T"
-        );
-        assert_eq!(
-            strip_markup("<unknown>kept</unknown>"),
-            "<unknown>kept</unknown>"
-        );
-    }
-
-    #[test]
-    fn monitor_forwards_restarts_and_stops_on_drop() {
-        // A stand-in for dbus-monitor that prints the capture and exits, so
-        // no session bus is involved.
-        let dir = std::env::temp_dir().join(format!("nexus-notify-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let capture = dir.join("capture.txt");
-        std::fs::write(&capture, CAPTURE).unwrap();
-        let script = dir.join("fake-dbus-monitor");
-        std::fs::write(&script, format!("#!/bin/sh\ncat '{}'\n", capture.display())).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-
-        let (monitor, rx) = NotificationMonitor::start_with(script).unwrap();
-        let wait = Duration::from_secs(10);
-        let names: Vec<String> = (0..3)
-            .map(|_| rx.recv_timeout(wait).expect("notification").app_name)
-            .collect();
-        // The third one comes from the restarted child.
-        assert_eq!(names, vec!["my \"app\"", "second", "my \"app\""]);
-
-        drop(monitor);
-        let started = Instant::now();
-        while rx.recv_timeout(Duration::from_millis(50)).is_ok() {}
-        assert!(started.elapsed() < Duration::from_secs(5));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 }

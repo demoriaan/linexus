@@ -29,6 +29,8 @@ const TOAST: Duration = Duration::from_millis(2_500);
 /// Our own slider changes the volume; that change should not pop up the
 /// volume overlay.
 const OWN_VOLUME_QUIET: Duration = Duration::from_secs(2);
+/// Shortest time a notification stays, so it can be read.
+const NOTIFICATION_MIN: Duration = Duration::from_millis(1500);
 
 pub(crate) struct Engine {
     pub(crate) runtime: Runtime,
@@ -41,7 +43,7 @@ pub(crate) struct Engine {
     providers: ProviderHandle,
     dispatcher: Dispatcher,
     feedback: Receiver<Feedback>,
-    notifications: Option<Receiver<nexus_sensors::Notification>>,
+    notifications: crate::notifications::Notifications,
     focus: crate::focus::Focus,
     /// Profile to return to when the app that switched profiles loses focus.
     auto_return_profile: Option<String>,
@@ -69,7 +71,7 @@ pub(crate) struct EngineParts {
     pub(crate) providers: ProviderHandle,
     pub(crate) dispatcher: Dispatcher,
     pub(crate) feedback: Receiver<Feedback>,
-    pub(crate) notifications: Option<Receiver<nexus_sensors::Notification>>,
+    pub(crate) notifications: crate::notifications::Notifications,
     pub(crate) focus: crate::focus::Focus,
     pub(crate) logger: nexus_events::EventLogger,
     pub(crate) state_path: Option<PathBuf>,
@@ -739,37 +741,38 @@ impl Engine {
         }
 
         let settings = self.runtime.settings().clone();
-        if let Some(receiver) = &self.notifications {
-            let mut incoming = Vec::new();
-            while let Ok(notification) = receiver.try_recv() {
-                incoming.push(notification);
+        let shown = &settings.notifications;
+        for n in self.notifications.poll(shown.enabled, now, &self.logger) {
+            let muted = shown.muted_apps.iter().any(|muted| {
+                n.names
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(muted.trim()))
+            });
+            if muted {
+                continue;
             }
-            for n in incoming {
-                if !settings.notifications.enabled
-                    || settings
-                        .notifications
-                        .muted_apps
-                        .iter()
-                        .any(|app| app.eq_ignore_ascii_case(&n.app_name))
-                {
-                    continue;
-                }
-                let (title, body) = if settings.notifications.private {
-                    (n.app_name.clone(), String::new())
-                } else {
-                    (n.summary.clone(), n.body.clone())
-                };
-                self.scene.show_overlay(
-                    Overlay::Notification {
-                        app: n.app_name.clone(),
-                        title,
-                        body,
-                        icon: None,
-                    },
-                    Duration::from_millis(u64::from(settings.notifications.duration_ms.max(1500))),
-                    now,
-                );
-            }
+            // Private: the app's name and icon, nothing of the message.
+            let (title, body, icon) = if shown.private {
+                (n.app.clone(), String::new(), n.app_icon)
+            } else {
+                (n.title, n.body, n.picture.or(n.app_icon))
+            };
+            // Up to the configured time; shorter when the app asks for less.
+            let longest = Duration::from_millis(u64::from(shown.duration_ms)).max(NOTIFICATION_MIN);
+            let duration = n
+                .timeout
+                .map_or(longest, |asked| asked.clamp(NOTIFICATION_MIN, longest));
+            self.scene.show_notification(
+                Overlay::Notification {
+                    app: n.app,
+                    title,
+                    body,
+                    icon,
+                },
+                duration,
+                now,
+                n.replaces,
+            );
         }
 
         let snapshot = self.metrics.latest();

@@ -13,12 +13,14 @@ use std::path::{Path, PathBuf};
 
 /// Desktop tools the actions and the daemon call, and what breaks without
 /// them. Where several tools are listed, any one of them does.
-const TOOLS: [(&[&str], &str); 6] = [
+const TOOLS: [(&[&str], &str); 5] = [
     (&["xdg-open"], "opening links and files"),
     (&["wpctl", "pactl"], "volume and microphone controls"),
-    (&["busctl"], "media controls"),
+    (
+        &["busctl"],
+        "media controls and desktop notifications on the strip",
+    ),
     (&["curl"], "HTTP request actions"),
-    (&["dbus-monitor"], "desktop notifications on the strip"),
     (&["loginctl"], "the lock-screen action"),
 ];
 

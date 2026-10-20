@@ -7,6 +7,7 @@ mod live;
 mod log;
 mod metrics_cache;
 mod news;
+mod notifications;
 mod runtime;
 mod scene;
 mod session;
@@ -113,12 +114,10 @@ fn main() -> Result<()> {
     };
     let providers = live::ProviderHandle::default();
     let _provider_worker = (!args.once).then(|| providers.spawn());
-    let notifications = (!args.once)
-        .then(nexus_sensors::NotificationMonitor::start)
-        .flatten();
-    let (_notification_monitor, notification_rx) = match notifications {
-        Some((monitor, rx)) => (Some(monitor), Some(rx)),
-        None => (None, None),
+    let notifications = if args.once {
+        notifications::Notifications::off()
+    } else {
+        notifications::Notifications::on()
     };
     let focus = if args.once || args.emulator_output.is_some() {
         focus::Focus::off()
@@ -144,7 +143,7 @@ fn main() -> Result<()> {
         providers,
         dispatcher,
         feedback: feedback_rx,
-        notifications: notification_rx,
+        notifications,
         focus,
         logger: logger.clone(),
         state_path: (!args.once).then_some(state_path),

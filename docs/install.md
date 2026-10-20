@@ -35,9 +35,8 @@ Optional desktop tools. Without them only the matching features stop working; `l
 |---|---|---|
 | `xdg-open` | xdg-utils | Opening links and files, launching apps |
 | `wpctl` or `pactl` | wireplumber (PipeWire), or pulseaudio-utils (PulseAudio) | Volume, volume widget, microphone mute. `wpctl` is used when both exist. |
-| `busctl` | systemd | Media controls (MPRIS), sleep detection |
+| `busctl` | systemd | Media controls (MPRIS), sleep detection, desktop notifications on the strip |
 | `curl` | curl | Feeds, weather, Home Assistant, web request actions |
-| `dbus-monitor` | dbus | Showing desktop notifications on the strip |
 | `loginctl` | systemd | Lock screen action, lock detection |
 | `upower` | upower | Battery levels of wireless mice, keyboards and headsets |
 | `rocm-smi` | rocm-smi-lib | AMD GPU readings where sysfs does not provide them |

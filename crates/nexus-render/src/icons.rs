@@ -79,7 +79,7 @@ fn rasterize(name: &str, size: f32, color: Rgb, filled: bool) -> Option<Arc<Pixm
         stroke_units(size),
         info.body
     );
-    let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).ok()?;
+    let tree = usvg::Tree::from_str(&svg, &svg_options()).ok()?;
     let px = size.ceil().max(1.0) as u32 + 2;
     let mut pixmap = Pixmap::new(px, px)?;
     let scale = size / 24.0;
@@ -201,7 +201,7 @@ pub fn data_url_image(data_url: &str) -> Option<Arc<Pixmap>> {
         .decode(payload.trim())
         .ok()?;
     let pixmap = if meta.starts_with("image/svg") {
-        let tree = usvg::Tree::from_data(&bytes, &usvg::Options::default()).ok()?;
+        let tree = usvg::Tree::from_data(&bytes, &svg_options()).ok()?;
         let size = tree.size();
         // Rasterize vector images at a size that suits a 48 px strip.
         let scale = (96.0 / size.width().max(size.height())).min(4.0);
@@ -257,9 +257,18 @@ fn decode_raster(bytes: &[u8], max: u32) -> Option<Pixmap> {
     rgba_to_pixmap(image.to_rgba8())
 }
 
+/// SVG options that never read files. An `<image href="/path">` could name
+/// any file, a pipe or `/dev/zero` included, and SVG icons can come from
+/// any app (notification icons); embedded `data:` images still work.
+fn svg_options() -> usvg::Options<'static> {
+    let mut options = usvg::Options::default();
+    options.image_href_resolver.resolve_string = Box::new(|_, _| None);
+    options
+}
+
 /// Rasterizes SVG bytes into a `size` square (application icons).
 pub fn rasterize_svg(bytes: &[u8], size: u32) -> Option<Pixmap> {
-    let tree = usvg::Tree::from_data(bytes, &usvg::Options::default()).ok()?;
+    let tree = usvg::Tree::from_data(bytes, &svg_options()).ok()?;
     let (w, h) = (tree.size().width(), tree.size().height());
     let scale = size as f32 / w.max(h);
     let mut pixmap = Pixmap::new(size, size)?;
@@ -280,6 +289,18 @@ pub fn decode_image(bytes: &[u8], max: u32) -> Option<Pixmap> {
         return rasterize_svg(bytes, max);
     }
     decode_raster(bytes, max)
+}
+
+/// Straight RGBA pixels (an inline notification image) as a pixmap whose
+/// longer side is at most `max` pixels.
+pub fn pixmap_from_rgba(width: u32, height: u32, rgba: Vec<u8>, max: u32) -> Option<Pixmap> {
+    let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_raw(width, height, rgba)?);
+    let image = if width.max(height) > max {
+        image.thumbnail(max, max)
+    } else {
+        image
+    };
+    rgba_to_pixmap(image.to_rgba8())
 }
 
 /// Converts straight RGBA into a premultiplied pixmap.

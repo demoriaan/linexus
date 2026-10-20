@@ -30,7 +30,7 @@ fn engine(runtime: Runtime, scratch: &Scratch) -> Engine {
         providers: ProviderHandle::default(),
         dispatcher: Dispatcher::new(true, false, logger.clone(), feedback_tx),
         feedback,
-        notifications: None,
+        notifications: crate::notifications::Notifications::off(),
         focus: crate::focus::Focus::off(),
         logger,
         state_path: None,

@@ -42,7 +42,7 @@ A map of the code for contributors: which crate owns what, how the daemon is put
 | Metrics worker | `metrics_cache.rs` | Collects system metrics and news cards into a shared snapshot every second; paused while the strip is off |
 | Provider worker | `live.rs` | Fetches slow or remote data, only for widgets the active profile contains |
 | Action worker | `dispatch.rs` | Runs actions one after another from a queue of 64; reports failures back to the engine |
-| Notification monitor | `nexus_sensors::NotificationMonitor` | Follows `dbus-monitor` for desktop notifications |
+| Notification monitor and preparer | `nexus_sensors::NotificationMonitor`, `notifications.rs` | While notifications are turned on: follow the session bus with `busctl monitor`, check whether the desktop would show the notification (Do Not Disturb, the app's settings), load the picture and the app icon |
 | Focus watcher | `nexus_sensors::FocusWatcher` | Reports the focused application (KWin, GNOME, Hyprland, Sway or X11) |
 
 Lock and sleep detection (`session.rs`) is no thread: the main loop polls it at most once per second.
@@ -143,7 +143,7 @@ Single taps fire on release unless the widget also has a double-tap meaning; onl
 | Home Assistant entities | Home Assistant REST API through `curl` | 5 s, and shortly after a toggle |
 | Command widget output | The configured program, 5 s timeout | The widget's interval, at least 2 s |
 | Album art, application icons | Art URL from MPRIS, icon themes | When first needed |
-| Desktop notifications | `dbus-monitor` | As they arrive |
+| Desktop notifications | `busctl monitor` on the session bus (`Notify`, GApplication and portal calls) | As they arrive |
 | Focused application | KWin script and journal; `hyprctl`, `swaymsg` or `xprop` | KWin as it changes; others every 0.7 s |
 | Session lock, sleep | `loginctl`, `busctl` | Every second |
 

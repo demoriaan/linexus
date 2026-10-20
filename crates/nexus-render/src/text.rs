@@ -1,6 +1,8 @@
 //! Text on the strip: Barlow Semi Condensed (vector, anti-aliased) for the
 //! interface and Terminus Bold 10x20 (bitmap) for the pixel headline style.
 
+mod compose;
+
 use crate::canvas::Canvas;
 use crate::font_headline;
 use crate::Rgb;
@@ -111,6 +113,120 @@ fn glyph(face: FontFace, ch: char, size: f32) -> Glyph {
     raster
 }
 
+/// What `face` draws for `ch`:
+/// - the character itself when the font has it;
+/// - a plain space for whitespace it lacks (thin or narrow no-break spaces);
+/// - an ASCII stand-in for common arrows, flats and sharps, stars,
+///   triangles and crosses (`→` as `->`, `E♭` as `Eb`);
+/// - nothing for emoji, pictographs, control characters and the invisible
+///   characters that join, vary or decorate them;
+/// - otherwise the character anyway, which shows the font's placeholder
+///   box, so a missing letter still shows that one is there.
+fn shown(face: FontFace, ch: char) -> Shown {
+    if has_glyph(face, ch) {
+        Shown::One(Some(ch))
+    } else if ch.is_whitespace() {
+        Shown::One(Some(' '))
+    } else if let Some(text) = stand_in(ch) {
+        Shown::Text(text.chars())
+    } else if ch.is_control() || is_emoji_or_format(ch) {
+        Shown::One(None)
+    } else {
+        Shown::One(Some(ch))
+    }
+}
+
+enum Shown {
+    One(Option<char>),
+    Text(std::str::Chars<'static>),
+}
+
+impl Iterator for Shown {
+    type Item = char;
+
+    fn next(&mut self) -> Option<char> {
+        match self {
+            Shown::One(ch) => ch.take(),
+            Shown::Text(chars) => chars.next(),
+        }
+    }
+}
+
+fn has_glyph(face: FontFace, ch: char) -> bool {
+    font(face).lookup_glyph_index(ch) != 0
+}
+
+/// `text` as `face` draws it. A letter followed by a combining accent
+/// becomes the composed letter when the font has that.
+fn drawn(text: &str, face: FontFace) -> impl Iterator<Item = char> + '_ {
+    let mut chars = text.chars().peekable();
+    std::iter::from_fn(move || {
+        let ch = chars.next()?;
+        let composed = chars
+            .peek()
+            .and_then(|&mark| compose::compose(ch, mark))
+            .filter(|&letter| has_glyph(face, letter));
+        if composed.is_some() {
+            chars.next();
+        }
+        Some(composed.unwrap_or(ch))
+    })
+    .flat_map(move |ch| shown(face, ch))
+}
+
+fn stand_in(ch: char) -> Option<&'static str> {
+    Some(match ch {
+        '\u{2192}' | '\u{27F6}' | '\u{2794}' | '\u{279C}' | '\u{27A1}' => "->",
+        '\u{2190}' | '\u{27F5}' | '\u{2B05}' => "<-",
+        '\u{2194}' => "<->",
+        '\u{21D2}' => "=>",
+        '\u{21D0}' => "<=",
+        '\u{2191}' | '\u{2B06}' | '\u{25B2}' | '\u{25B4}' | '\u{25B3}' => "^",
+        '\u{2193}' | '\u{2B07}' | '\u{25BC}' | '\u{25BE}' | '\u{25BD}' => "v",
+        '\u{25B6}' | '\u{25BA}' | '\u{25B8}' => ">",
+        '\u{25C0}' | '\u{25C4}' | '\u{25C2}' => "<",
+        '\u{266D}' => "b",
+        '\u{266F}' => "#",
+        '\u{2605}' | '\u{272D}' | '\u{2B50}' => "*",
+        '\u{2606}' => "\u{B7}",
+        '\u{2713}' | '\u{2714}' | '\u{2705}' => "+",
+        '\u{2717}' | '\u{2718}' | '\u{2715}' | '\u{2716}' | '\u{274C}' => "x",
+        _ => return None,
+    })
+}
+
+/// Emoji and pictographs (left out rather than drawn as boxes), and the
+/// invisible characters that join, vary or decorate letters and emoji.
+fn is_emoji_or_format(ch: char) -> bool {
+    matches!(
+        u32::from(ch),
+        0xAD
+            | 0x300..=0x36F
+            | 0x200B..=0x200F
+            | 0x202A..=0x202E
+            | 0x2060..=0x206F
+            | 0x20D0..=0x20FF
+            | 0x2300..=0x23FF
+            | 0x25A0..=0x27BF
+            | 0x2B00..=0x2BFF
+            | 0x3030
+            | 0x303D
+            | 0x3297
+            | 0x3299
+            | 0xFE00..=0xFE0F
+            | 0xFEFF
+            | 0x1F000..=0x1FBFF
+            | 0xE0000..=0xE01EF
+    )
+}
+
+/// `text` as `face` draws it, with the runs of whitespace that left-out
+/// characters can leave behind collapsed to one space.
+pub fn printable(text: &str, face: FontFace) -> String {
+    let kept: String = drawn(text, face).collect();
+    kept.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn digit_advance(face: FontFace, size: f32) -> f32 {
     ('0'..='9')
         .map(|d| font(face).metrics(d, size).advance_width)
@@ -145,7 +261,7 @@ pub fn measure(text: &str, style: &TextStyle) -> f32 {
     let digit = style.tabular.then(|| digit_advance(style.face, style.size));
     let mut width = 0.0;
     let mut prev: Option<char> = None;
-    for ch in text.chars() {
+    for ch in drawn(text, style.face) {
         if let (Some(p), None) = (prev, digit) {
             width += f.horizontal_kern(p, ch, style.size).unwrap_or(0.0);
         }
@@ -182,7 +298,7 @@ pub fn draw(canvas: &mut Canvas, x: f32, baseline: f32, text: &str, style: &Text
     let mut pen = x;
     let mut prev: Option<char> = None;
     let base = baseline.round() as i32;
-    for ch in text.chars() {
+    for ch in drawn(text, style.face) {
         if let (Some(p), None) = (prev, digit) {
             pen += f.horizontal_kern(p, ch, style.size).unwrap_or(0.0);
         }

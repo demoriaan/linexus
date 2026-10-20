@@ -8,7 +8,8 @@ pub use providers::clock::{local_clock, LocalClock};
 pub use feeds::{cached_feed_titles, inspect_feed_url, FeedInspection};
 
 pub use providers::apps::{
-    list_applications, resolve_icon, running_programs, running_targets, AppEntry,
+    list_applications, list_desktop_entries, resolve_icon, running_programs, running_targets,
+    AppEntry,
 };
 pub use providers::command::run_command_capture;
 pub use providers::focus::{
@@ -23,7 +24,9 @@ pub use providers::hass::{
 pub use providers::hwmon::{read_hwmon, HwmonKind, HwmonReading};
 pub use providers::media::{current_media, current_media_and_players, fetch_art_bytes, MediaState};
 pub use providers::metrics::{metric_catalog, read_cpu_clock_mhz, MetricReading, MetricUnit};
-pub use providers::notify::{parse_dbus_monitor, Notification, NotificationMonitor};
+pub use providers::notify::{
+    Notification, NotificationIcon, NotificationMonitor, PopupPolicy, Urgency,
+};
 pub use providers::weather::{
     fetch_weather, geocode, parse_forecast, parse_geocoding, GeoPlace, WeatherReport,
     WEATHER_ATTRIBUTION,

@@ -190,17 +190,18 @@ pub fn draw_overlay(
                 None => canvas.icon("bell", 15.0, y + 11.0, 24.0, palette.accent, 1.0),
             }
             let caption = TextStyle::new(FontFace::SemiBold, 11.0, palette.accent).tracking(0.6);
-            let app_w = canvas.text(54.0, y + 16.0, &app.to_uppercase(), &caption);
+            let app = text::printable(&app.to_uppercase(), caption.face);
+            let app_w = canvas.text(54.0, y + 16.0, &app, &caption);
             let title_style = TextStyle::new(FontFace::Bold, 15.0, palette.text);
             canvas.text_fit(
                 54.0 + app_w + 10.0,
                 y + 17.0,
-                title,
+                &text::printable(title, title_style.face),
                 &title_style,
                 WIDTH as f32 - 70.0 - app_w,
             );
             let body_style = TextStyle::new(FontFace::Medium, 14.0, palette.text_soft);
-            let line = body.split_whitespace().collect::<Vec<_>>().join(" ");
+            let line = text::printable(body, body_style.face);
             canvas.text_fit(54.0, y + 37.0, &line, &body_style, WIDTH as f32 - 66.0);
         }
         Overlay::Volume(volume) => {

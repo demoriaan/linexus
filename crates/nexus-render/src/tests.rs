@@ -160,6 +160,86 @@ fn text_measures_match_drawn_width() {
 }
 
 #[test]
+fn characters_the_font_lacks_are_left_out() {
+    assert_eq!(
+        text::printable(
+            "\u{1F399} Aufnahme \u{1F600}\u{FE0F}  l\u{e4}uft",
+            FontFace::Medium
+        ),
+        "Aufnahme l\u{e4}uft"
+    );
+    let style = TextStyle::new(FontFace::Bold, 15.0, Rgb::new(255, 255, 255));
+    assert_eq!(
+        text::measure("A\u{1F399}V", &style),
+        text::measure("AV", &style)
+    );
+    assert_eq!(
+        text::measure("A\u{26A0}\u{1F600}V", &style),
+        text::measure("AV", &style)
+    );
+    // Common symbols get ASCII stand-ins; decomposed accents lose the mark.
+    assert_eq!(
+        text::printable(
+            "E\u{266D} \u{2192} F\u{266F} \u{2605}\u{2605}\u{2606} \u{25B2}2 \u{2717}",
+            FontFace::Medium
+        ),
+        "Eb -> F# **\u{B7} ^2 x"
+    );
+    // Accents written as separate marks join their letter.
+    assert_eq!(
+        text::printable("Mu\u{308}ller Cafe\u{301} scho\u{308}n", FontFace::Medium),
+        "Müller Café schön"
+    );
+    assert_eq!(
+        text::measure("Mu\u{308}ller", &style),
+        text::measure("Müller", &style)
+    );
+    assert_eq!(
+        text::printable("\u{2713} ok \u{2717} no", FontFace::Medium),
+        "+ ok x no"
+    );
+    assert_eq!(
+        text::measure("A\u{2192}V", &style),
+        text::measure("A->V", &style)
+    );
+    // Missing letters keep a placeholder; missing spaces become spaces.
+    assert!(text::measure("A\u{416}V", &style) > text::measure("AV", &style));
+    assert_eq!(
+        text::printable("mul\u{21B}umesc", FontFace::Medium),
+        "mul\u{21B}umesc"
+    );
+    assert_eq!(
+        text::measure("1\u{202F}000", &style),
+        text::measure("1 000", &style)
+    );
+    let mut with = Canvas::new();
+    let mut without = Canvas::new();
+    with.text(10.0, 30.0, "A\u{1F399}V", &style);
+    without.text(10.0, 30.0, "AV", &style);
+    assert_eq!(with.rgba(), without.rgba());
+}
+
+#[test]
+fn svg_images_never_read_files() {
+    // A red square in a file the SVG points at must not be loaded.
+    let dir = std::env::temp_dir().join(format!("nexus-svg-href-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let inner = dir.join("red.svg");
+    std::fs::write(
+        &inner,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="red"/></svg>"#,
+    )
+    .unwrap();
+    let outer = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="8" height="8"><image width="8" height="8" xlink:href="{}"/></svg>"#,
+        inner.display()
+    );
+    let pixmap = icons::rasterize_svg(outer.as_bytes(), 8).unwrap();
+    assert!(pixmap.data().iter().all(|&byte| byte == 0));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn format_helpers() {
     assert_eq!(
         format::value(12.4 * 1024.0 * 1024.0, Unit::BytesPerSec, false),

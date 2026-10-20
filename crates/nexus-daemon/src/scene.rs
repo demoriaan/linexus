@@ -15,6 +15,10 @@ const PRESS_OUT: Duration = Duration::from_millis(220);
 const INDICATOR: Duration = Duration::from_millis(1_400);
 const INDICATOR_FADE: Duration = Duration::from_millis(400);
 const OVERLAY_SLIDE: Duration = Duration::from_millis(180);
+/// Overlays waiting behind the shown one.
+const MAX_QUEUED: usize = 4;
+/// Shortest time an update of a shown notification stays.
+const UPDATE_MIN: Duration = Duration::from_millis(1500);
 
 const WIDTH: f32 = nexus_render::WIDTH as f32;
 
@@ -38,6 +42,8 @@ struct ShownOverlay {
     overlay: Overlay,
     shown: Instant,
     duration: Duration,
+    /// The time it was first given; updates may stretch it to twice that.
+    first_duration: Duration,
 }
 
 #[derive(Default)]
@@ -129,15 +135,68 @@ impl Scene {
                     duration.max(now.saturating_duration_since(current.shown) + duration / 2);
                 return;
             }
+            // A waiting volume or track overlay takes newer data in place,
+            // so turning a knob cannot push notifications out of the queue.
+            if matches!(overlay, Overlay::Volume(_) | Overlay::NowPlaying(_)) {
+                if let Some(queued) = self.queue.iter_mut().find(|(queued, _)| {
+                    std::mem::discriminant(queued) == std::mem::discriminant(&overlay)
+                }) {
+                    *queued = (overlay, duration);
+                    return;
+                }
+            }
+            // A full queue gives up its oldest entry; the newest is likelier
+            // to matter.
             self.queue.push_back((overlay, duration));
-            self.queue.truncate(4);
+            while self.queue.len() > MAX_QUEUED {
+                self.queue.pop_front();
+            }
             return;
         }
         self.overlay = Some(ShownOverlay {
             overlay,
             shown: now,
             duration,
+            first_duration: duration,
         });
+    }
+
+    /// Shows a desktop notification. One that `replaces` an earlier one of
+    /// the same app (a status or progress update) takes its place, shown or
+    /// queued, instead of queueing behind it.
+    pub(crate) fn show_notification(
+        &mut self,
+        overlay: Overlay,
+        duration: Duration,
+        now: Instant,
+        replaces: bool,
+    ) {
+        if replaces {
+            let app = notification_app(&overlay).map(str::to_string);
+            // Updates keep it up, but at most twice its first time in all,
+            // so a steady stream of them cannot hold back the queue. An
+            // update that would not get its short minimum in there queues.
+            if let Some(current) = self.overlay.as_mut().filter(|current| {
+                let elapsed = now.saturating_duration_since(current.shown);
+                elapsed < current.duration
+                    && elapsed + duration.min(UPDATE_MIN) <= current.first_duration * 2
+                    && notification_app(&current.overlay) == app.as_deref()
+            }) {
+                let elapsed = now.saturating_duration_since(current.shown);
+                current.overlay = overlay;
+                current.duration = (elapsed + duration).min(current.first_duration * 2);
+                return;
+            }
+            if let Some(queued) = self
+                .queue
+                .iter_mut()
+                .find(|(queued, _)| notification_app(queued) == app.as_deref())
+            {
+                *queued = (overlay, duration);
+                return;
+            }
+        }
+        self.show_overlay(overlay, duration, now);
     }
 
     /// Updates a shown track overlay with newer data of the same track: its
@@ -218,6 +277,7 @@ impl Scene {
                     overlay,
                     shown: now,
                     duration,
+                    first_duration: duration,
                 });
         }
     }
@@ -336,6 +396,13 @@ fn find_page<'a>(
     Some((page, &profile.theme))
 }
 
+fn notification_app(overlay: &Overlay) -> Option<&str> {
+    match overlay {
+        Overlay::Notification { app, .. } => Some(app),
+        _ => None,
+    }
+}
+
 fn press_strength(started: Instant, released: Option<(Instant, f32)>, now: Instant) -> f32 {
     match released {
         None => {
@@ -425,6 +492,135 @@ mod tests {
         let live = LiveData::default();
         scene.compose(&runtime, &live, t + Duration::from_millis(100));
         assert!(scene.transition.is_none());
+    }
+
+    #[test]
+    fn a_notification_update_replaces_the_shown_or_queued_one() {
+        let note = |app: &str, title: &str| Overlay::Notification {
+            app: app.into(),
+            title: title.into(),
+            body: String::new(),
+            icon: None,
+        };
+        let mut scene = Scene::default();
+        let t = Instant::now();
+        let six = Duration::from_secs(6);
+        scene.show_notification(note("Mail", "1 new"), six, t, false);
+        scene.show_notification(note("Chat", "Hi"), six, t, false);
+        // An update of the shown one changes it in place and keeps it up.
+        scene.show_notification(note("Mail", "2 new"), six, t + Duration::from_secs(4), true);
+        assert_eq!(scene.overlay(), Some(&note("Mail", "2 new")));
+        assert_eq!(scene.queue.len(), 1);
+        assert!(scene.animating(t + Duration::from_secs(9)));
+        assert_eq!(scene.overlay(), Some(&note("Mail", "2 new")));
+        // An update of a queued one takes its place in the queue.
+        scene.show_notification(note("Chat", "Hi again"), six, t, true);
+        assert_eq!(scene.queue.len(), 1);
+        assert_eq!(scene.queue[0].0, note("Chat", "Hi again"));
+        // A new notification of the same app still queues.
+        scene.show_notification(note("Mail", "other"), six, t, false);
+        assert_eq!(scene.queue.len(), 2);
+        // Updates hold it up for at most twice its time.
+        scene.show_notification(note("Mail", "3 new"), six, t + Duration::from_secs(9), true);
+        assert!(scene.animating(t + Duration::from_secs(11)));
+        assert_eq!(scene.overlay(), Some(&note("Mail", "3 new")));
+        scene.animating(t + Duration::from_secs(13));
+        assert_eq!(scene.overlay(), Some(&note("Chat", "Hi again")));
+    }
+
+    #[test]
+    fn a_short_update_still_shows_and_a_late_one_queues() {
+        let note = |title: &str| Overlay::Notification {
+            app: "Downloads".into(),
+            title: title.into(),
+            body: String::new(),
+            icon: None,
+        };
+        let mut scene = Scene::default();
+        let t = Instant::now();
+        scene.show_notification(note("Downloading"), Duration::from_secs(6), t, false);
+        // "Complete" asks for 2 s at 4.5 s: it stays until 6.5 s.
+        let at = t + Duration::from_millis(4500);
+        scene.show_notification(note("Complete"), Duration::from_secs(2), at, true);
+        assert!(scene.animating(t + Duration::from_millis(6300)));
+        assert_eq!(scene.overlay(), Some(&note("Complete")));
+        // At 11 s an update no longer fits into twice the first 6 s: it
+        // queues and shows after the current one ends.
+        let mut scene = Scene::default();
+        scene.show_notification(note("1 %"), Duration::from_secs(6), t, false);
+        scene.show_notification(
+            note("50 %"),
+            Duration::from_secs(6),
+            t + Duration::from_secs(5),
+            true,
+        );
+        scene.show_notification(
+            note("99 %"),
+            Duration::from_secs(6),
+            t + Duration::from_secs(11),
+            true,
+        );
+        assert_eq!(scene.overlay(), Some(&note("50 %")));
+        assert_eq!(scene.queue.len(), 1);
+        scene.animating(t + Duration::from_millis(12_300));
+        assert_eq!(scene.overlay(), Some(&note("99 %")));
+    }
+
+    #[test]
+    fn volume_changes_do_not_crowd_out_queued_notifications() {
+        let note = Overlay::Notification {
+            app: "Mail".into(),
+            title: "New".into(),
+            body: String::new(),
+            icon: None,
+        };
+        let volume = |percent| {
+            Overlay::Volume(nexus_render::VolumeInfo {
+                percent,
+                muted: false,
+            })
+        };
+        let mut scene = Scene::default();
+        let t = Instant::now();
+        let second = Duration::from_secs(1);
+        scene.show_notification(note.clone(), Duration::from_secs(6), t, false);
+        scene.show_notification(note.clone(), Duration::from_secs(6), t, false);
+        for percent in 0..10 {
+            scene.show_overlay(volume(percent * 5), second, t);
+        }
+        assert_eq!(scene.queue.len(), 2);
+        assert_eq!(scene.queue[0].0, note);
+        assert_eq!(scene.queue[1].0, volume(45));
+        // Toasts are messages of their own: each one waits its turn.
+        let toast = |text: &str| Overlay::Toast {
+            icon: "bell".into(),
+            text: text.into(),
+        };
+        scene.show_overlay(toast("Break"), second, t);
+        scene.show_overlay(toast("Profile"), second, t);
+        assert_eq!(scene.queue.len(), 4);
+    }
+
+    #[test]
+    fn a_full_queue_drops_its_oldest_entry() {
+        // Notifications queue instead of replacing each other.
+        let note = |text: &str| Overlay::Notification {
+            app: "App".into(),
+            title: text.into(),
+            body: String::new(),
+            icon: None,
+        };
+        let mut scene = Scene::default();
+        let t = Instant::now();
+        for n in 0..=MAX_QUEUED + 1 {
+            scene.show_overlay(note(&n.to_string()), Duration::from_secs(1), t);
+        }
+        assert_eq!(scene.queue.len(), MAX_QUEUED);
+        assert_eq!(scene.queue.front().unwrap().0, note("2"));
+        assert_eq!(
+            scene.queue.back().unwrap().0,
+            note(&(MAX_QUEUED + 1).to_string())
+        );
     }
 
     #[test]

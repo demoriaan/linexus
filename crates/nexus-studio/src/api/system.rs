@@ -21,7 +21,7 @@ const UDEV_FIX: &str = "linexusctl print-udev-rule | sudo tee /etc/udev/rules.d/
 /// `(program, what it is used for, package that usually ships it)`; each
 /// entry lists alternatives, the first one is suggested when all are missing.
 type Backend = (&'static str, &'static str, &'static str);
-const BACKENDS: [&[Backend]; 5] = [
+const BACKENDS: [&[Backend]; 4] = [
     &[(
         "xdg-open",
         "opening links and launching applications",
@@ -35,9 +35,12 @@ const BACKENDS: [&[Backend]; 5] = [
             "pulseaudio-utils",
         ),
     ],
-    &[("busctl", "media controls over MPRIS", "systemd")],
+    &[(
+        "busctl",
+        "media controls over MPRIS and desktop notifications",
+        "systemd",
+    )],
     &[("curl", "feeds, weather and Home Assistant", "curl")],
-    &[("dbus-monitor", "mirroring desktop notifications", "dbus")],
 ];
 
 pub fn route(request: &Request, state: &AppState) -> Option<Response> {

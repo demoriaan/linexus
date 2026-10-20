@@ -375,7 +375,7 @@ fn run_worker(shared: &Shared) {
             }
             commands_due.insert(id.clone(), now + *every);
             let output = nexus_sensors::run_command_capture(program, args, Duration::from_secs(5))
-                .unwrap_or_else(|error| format!("⚠ {error}"));
+                .unwrap_or_else(|error| format!("! {error}"));
             update(&mut |p| {
                 p.commands.insert(id.clone(), output.clone());
             });

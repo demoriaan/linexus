@@ -244,10 +244,10 @@ Search a place to set the default location for weather widgets. Weather data com
 
 ### Messages on the strip
 
-- **Show desktop notifications** mirrors notifications onto the strip. Touch the strip to dismiss one.
-- **Hide message text** shows only the application's name.
-- **Show for** sets how long a message stays (2 to 15 seconds).
-- **Never show from** takes application names, separated by commas.
+- **Show desktop notifications** mirrors notifications onto the strip, with the app's icon or the picture the notification carries. It follows the desktop's notification settings: during Do Not Disturb only urgent notifications appear (on KDE Plasma also apps allowed during it), and apps whose popups are turned off in the desktop settings stay off the strip too. An update of a notification (a new status, more progress) replaces the one on the strip. Touch the strip to dismiss one.
+- **Hide message text** shows only the application's name and icon, without the text or the notification's picture.
+- **Show for up to** sets how long a message stays (2 to 15 seconds). A notification that asks for less time, such as a short status message, leaves sooner.
+- **Never show from** takes application names, separated by commas: the name shown on the strip, the app's menu name or its desktop file id.
 - **Show volume changes** and **Show new tracks** control the short pop-ups for volume and track changes.
 - **Show a test message** sends a message to the strip.
 
@@ -280,7 +280,7 @@ Both lists hold targets that receive the current headline card: an MQTT broker (
 
 - **Status**: connection state, device path, profile and page on the strip, a brightness slider, and **Turn off** or **Turn on**. **Start daemon**, **Restart** and **Stop** run `systemctl --user` for `linexusd.service`; **Start with my session** enables or disables it.
 - **Behaviour**: page change animation (Slide, Fade, Instant), language on the strip, 24 or 12 hour clock, °C or °F, dimming after an idle time and the dimmed brightness, "First touch only wakes", turning off after an idle time, and "Off while the screen is locked". These are the `settings` fields in [configuration.md](configuration.md#settings).
-- **Setup checks**: the strip, the udev rule, the daemon, autostart, the input helper, the desktop tools (`xdg-open`, `wpctl` or `pactl`, `busctl`, `curl`, `dbus-monitor`), the GNOME focus extension on GNOME, and OpenLinkHub. Each problem comes with a command you can copy.
+- **Setup checks**: the strip, the udev rule, the daemon, autostart, the input helper, the desktop tools (`xdg-open`, `wpctl` or `pactl`, `busctl`, `curl`), the GNOME focus extension on GNOME, and OpenLinkHub. Each problem comes with a command you can copy.
 - **Recent events**: the daemon's event log.
 
 The brightness slider here changes the strip immediately and is kept across daemon restarts, but it does not change the profile's brightness. Use the slider in the profile's **Look** panel for that.
