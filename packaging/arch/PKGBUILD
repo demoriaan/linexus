@@ -1,6 +1,6 @@
 # Maintainer: donno <donno@donno.de>
 pkgname=linexus
-pkgver=1.1.0
+pkgver=1.2.0
 pkgrel=1
 pkgdesc='Daemon and web configurator for the Corsair iCUE Nexus touch strip'
 arch=('x86_64' 'aarch64')
