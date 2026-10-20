@@ -21,7 +21,19 @@ MSG
 }
 
 post_upgrade() {
+  # Running input helpers pick up the new binary and unit.
+  systemctl daemon-reload 2>/dev/null || true
+  systemctl try-restart 'linexus-inputd@*.service' 2>/dev/null || true
   post_install
+}
+
+pre_remove() {
+  # Turn off the input helpers that use the package's system unit.
+  local link
+  for link in /etc/systemd/system/*.wants/linexus-inputd@*.service; do
+    [[ -L $link ]] || continue
+    systemctl disable --now "${link##*/}" 2>/dev/null || systemctl disable "${link##*/}" 2>/dev/null || true
+  done
 }
 
 post_remove() {

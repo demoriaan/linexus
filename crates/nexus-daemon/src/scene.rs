@@ -4,7 +4,7 @@
 
 use crate::runtime::{Direction, PageChange, Runtime};
 use nexus_config::{Page, PageTransition, Theme};
-use nexus_render::{Canvas, LiveData, Overlay, UiState};
+use nexus_render::{Canvas, LiveData, MediaInfo, Overlay, UiState};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -138,6 +138,25 @@ impl Scene {
             shown: now,
             duration,
         });
+    }
+
+    /// Updates a shown track overlay with newer data of the same track: its
+    /// cover, which is fetched after the track change, and the position.
+    pub(crate) fn refresh_now_playing(&mut self, media: &MediaInfo) {
+        if let Some(ShownOverlay {
+            overlay: Overlay::NowPlaying(shown),
+            ..
+        }) = &mut self.overlay
+        {
+            if shown.title == media.title && shown.artist == media.artist {
+                **shown = media.clone();
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn overlay(&self) -> Option<&Overlay> {
+        self.overlay.as_ref().map(|shown| &shown.overlay)
     }
 
     /// Hides the overlay on touch. Returns whether the touch is used up:
@@ -355,6 +374,29 @@ mod tests {
         let released = Some((t + PRESS_IN, 1.0));
         assert!((press_strength(t, released, t + PRESS_IN + PRESS_OUT / 2) - 0.5).abs() < 0.01);
         assert_eq!(press_strength(t, released, t + PRESS_IN + PRESS_OUT), 0.0);
+    }
+
+    #[test]
+    fn a_track_overlay_takes_the_cover_that_arrives_later() {
+        let track = |title: &str, art: bool| MediaInfo {
+            title: title.into(),
+            artist: "Artist".into(),
+            art: art
+                .then(|| std::sync::Arc::new(nexus_render::tiny_skia::Pixmap::new(1, 1).unwrap())),
+            ..MediaInfo::default()
+        };
+        let mut scene = Scene::default();
+        let t = Instant::now();
+        scene.show_overlay(
+            Overlay::NowPlaying(Box::new(track("Second", false))),
+            Duration::from_secs(4),
+            t,
+        );
+        // Data of another track does not replace it.
+        scene.refresh_now_playing(&track("Third", true));
+        assert!(matches!(scene.overlay(), Some(Overlay::NowPlaying(m)) if m.art.is_none()));
+        scene.refresh_now_playing(&track("Second", true));
+        assert!(matches!(scene.overlay(), Some(Overlay::NowPlaying(m)) if m.art.is_some()));
     }
 
     #[test]

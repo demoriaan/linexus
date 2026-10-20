@@ -14,9 +14,9 @@ The Nexus is a 640 × 48 pixel touch display that Corsair supports only through 
 
 - 15 widget types: clock, sensor readings (number, bar, graph or ring), network speed, now playing with album art and transport controls, a volume slider, buttons with app icons and a running-app dot, scrolling news headlines, weather, Home Assistant switches, Pomodoro/countdown/stopwatch timers, text with live values, images, command output and spacers.
 - Touch that feels native: tap, double tap, hold, repeat while held, drag the volume slider, and swipe between pages with the page following your finger.
-- Actions: launch apps from their desktop entries, open links and folders, media keys over MPRIS, volume and microphone mute through PipeWire, keyboard shortcuts and typed text (also on Wayland), switch pages and profiles, brightness, lock the screen, call Home Assistant services, send HTTP requests, run programs (opt-in), or chain several actions.
+- Actions: launch apps from their desktop entries, open links and folders, media keys over MPRIS, volume and microphone mute through PipeWire or PulseAudio, keyboard shortcuts and typed text (also on Wayland), switch pages and profiles, brightness, lock the screen, call Home Assistant services, send HTTP requests, run programs (opt-in), or chain several actions.
 - Desktop notifications, volume changes and track changes appear as short overlays.
-- Profiles switch on their own when a given app is focused (KDE Plasma, Hyprland, Sway, X11), and hidden pages work as folders that close after a timeout.
+- Profiles switch on their own when a given app is focused (KDE Plasma, GNOME, Hyprland, Sway, X11), and hidden pages work as folders that close after a timeout.
 - The strip dims or turns off when idle, turns off while the session is locked, and wakes on the first touch without triggering anything.
 
 **Linexus Studio**
@@ -42,9 +42,9 @@ On x86_64 Linux with a systemd user session, run this as your desktop user:
 curl -fsSL https://github.com/demoriaan/linexus/releases/latest/download/install.sh | bash
 ```
 
-On Arch Linux and its derivatives the script installs the `linexus` package with pacman. On other distributions it puts the prebuilt binaries in `~/.local/bin` and adds the user services, the app launcher and a default config. It asks for your sudo password for the parts that need root (the package, or the device rule) and checks every download against the checksum list of the release. Read [install.sh](install.sh) first if you like; `... | bash -s -- --help` lists its options.
+The script installs the `linexus` package with your package manager: pacman on Arch, apt on Debian and Ubuntu, dnf on Fedora, zypper on openSUSE, and their derivatives. Elsewhere it puts the prebuilt binaries in `~/.local/bin`. Then it sets up the daemon for your user and a default config. It asks for your sudo password for the parts that need root (the package, or the device rule) and checks every download against the checksum list of the release. Read [install.sh](install.sh) first if you like; `... | bash -s -- --help` lists its options.
 
-**Manual download.** The [releases page](https://github.com/demoriaan/linexus/releases/latest) has the Arch package (`sudo pacman -U linexus-*-x86_64.pkg.tar.zst`) and a tarball with the binaries for other distributions.
+**Manual download.** The [releases page](https://github.com/demoriaan/linexus/releases/latest) has a `.pkg.tar.zst` for Arch, a `.deb` for Debian and Ubuntu, an `.rpm` for Fedora and openSUSE, and a tarball with the binaries for everything else. Install the package with `sudo pacman -U`, `sudo apt install ./linexus_*.deb`, `sudo dnf install ./linexus-*.rpm` or `sudo zypper install --allow-unsigned-rpm ./linexus-*.rpm`.
 
 **From source** (Rust 1.88 or newer, a C compiler, `pkg-config` and the libudev headers):
 
@@ -58,7 +58,7 @@ On Arch, `packaging/arch/build-local-package.sh` builds the package from the che
 
 **With an AI agent.** Point your coding agent to [docs/ai-agents.md](docs/ai-agents.md). It lists the exact commands, how to verify the result, and which steps the agent has to hand to you because they need root.
 
-It is developed and tested on Arch Linux with KDE Plasma 6 (Wayland).
+It is developed and tested with the strip on Arch Linux with KDE Plasma 6 (Wayland). The installer and the packages are tested in containers on Ubuntu, Debian, Fedora, Rocky Linux, openSUSE and Arch Linux.
 
 Then unplug and replug the Nexus, open **Linexus Studio** from your app launcher (or run `linexus-studio`) and check the Device section. `linexusctl doctor` prints the same checks in a terminal; `linexusctl doctor --fix` applies the safe fixes.
 

@@ -64,7 +64,7 @@ cargo test --workspace
 1. Set the new version in `Cargo.toml` (`[workspace.package]`) and `packaging/arch/PKGBUILD` (`pkgver`, and reset `pkgrel` to 1), then run `cargo update --workspace` so `Cargo.lock` follows.
 2. Add a section for the version to [CHANGELOG.md](CHANGELOG.md). The release notes are taken from it.
 3. Commit, then tag and push: `git tag -a vX.Y.Z -m "Linexus X.Y.Z" && git push origin master vX.Y.Z`.
-4. The Release workflow builds the Arch package and the x86_64 tarball, adds `install.sh` and `SHA256SUMS`, and creates a draft release. Check the draft, then publish it. The installer only sees published releases.
+4. The Release workflow builds the Arch package, the `.deb`, the `.rpm` and the x86_64 tarball, adds `install.sh` and `SHA256SUMS`, and creates a draft release. Check the draft, then publish it. The installer only sees published releases.
 
 ## Clean-room rule
 

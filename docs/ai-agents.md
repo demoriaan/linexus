@@ -11,13 +11,14 @@ Run these as the person's desktop user:
 ```sh
 uname -sm                                  # expect: Linux x86_64
 systemctl --user show-environment >/dev/null && echo "user session ok"
-command -v pacman && echo "Arch-based: the installer uses the package"
+for pm in pacman apt-get dnf zypper; do command -v "$pm"; done   # which package manager the installer uses
 ```
 
 - **Architecture.** Prebuilt files exist for x86_64 only. On other architectures, build from source as described in [install.md](install.md#option-2-from-source-with-install-devsh).
 - **systemd user session.** Without it, the installer still installs the programs, but the daemon has to be started by hand.
 - **The strip itself.** `lsusb -d 1b1c:1b8e` shows whether it is plugged in. Installing works without it.
-- **Ask first.** Installing adds system files: the Arch package, or a udev rule in `/etc/udev/rules.d/`. Ask the person before you start.
+- **glibc.** `getconf GNU_LIBC_VERSION` must show 2.34 or newer. The installer checks this too and stops with a message on older systems.
+- **Ask first.** Installing adds system files: the `linexus` package, or a udev rule in `/etc/udev/rules.d/`. Ask the person before you start.
 
 ## 2. Install
 
@@ -43,7 +44,7 @@ Options, passed after the script name:
 | Option | Effect |
 |---|---|
 | `--version X.Y.Z` | Install a given release instead of the latest |
-| `--method arch` / `--method tarball` | Force the pacman package or the `~/.local` install. `auto` picks `arch` when `pacman` exists. |
+| `--method arch\|deb\|rpm\|tarball` | Force a package format, or the `~/.local` install. `auto` picks the package for the package manager it finds (pacman, apt-get, dnf or zypper), and keeps updating an existing `~/.local` install. |
 | `--no-root` | Never call `sudo`; print the root commands instead. Recommended for agents. |
 | `--no-start` | Enable the daemon, but do not start it |
 | `--input-helper` | Also enable the helper for keyboard shortcut and text actions |
@@ -54,10 +55,10 @@ Options, passed after the script name:
 
 With exit code `3`, the installer has printed the commands that need root under `==> Steps that need root`.
 
-1. Pass the exact commands to the person and ask them to run them. In Claude Code, the person can type `! <command>` so that the output lands in the conversation. Do not try to get around `sudo`.
+1. Pass the exact commands to the person and ask them to run them. If your tool lets the person run a command in the conversation, suggest that, so that the output lands where you can read it. Do not try to get around `sudo`.
 2. Run `bash linexus-install.sh --no-root` again. When the root steps are in place, it exits with `0`.
 
-On Arch, the root step is the package installation itself, so nothing is installed before the person runs it. The second run then sets up the daemon for the user. On other distributions, the first run already installed the programs in `~/.local/bin`; the root step adds the device rule.
+With a package (pacman, apt-get, dnf or zypper), the root step is the package installation itself, so nothing is installed before the person runs it. The second run then sets up the daemon for the user. With the `~/.local` install, the first run already installed the programs in `~/.local/bin`; the root step adds the device rule.
 
 ## 3. Verify
 
@@ -78,6 +79,7 @@ If `~/.local/bin` is not on `PATH` (tarball install), call `~/.local/bin/linexus
 | `OpenLinkHub is running (pid ...)` | OpenLinkHub also claims the strip. Ask the person before you stop it, because it may drive their other Corsair devices. |
 | `daemon (linexusd) is not running` | `systemctl --user enable --now linexusd.service`, then check `journalctl --user -u linexusd -n 50`. |
 | `GLIBC_2.xx not found` after the Arch package | The derivative lags behind Arch. Run `--uninstall`, then install with `--method tarball`. |
+| `wpctl or pactl missing` | Volume actions need PipeWire's `wpctl` (package wireplumber) or PulseAudio's `pactl` (package pulseaudio-utils). |
 
 ## 4. Hand over
 

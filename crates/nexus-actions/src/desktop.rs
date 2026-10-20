@@ -26,6 +26,9 @@ const SESSION_ENV_KEYS: &[&str] = &[
     "DESKTOP_SESSION",
     "KDE_FULL_SESSION",
     "KDE_SESSION_VERSION",
+    // The focus watcher finds Hyprland and Sway through these.
+    "HYPRLAND_INSTANCE_SIGNATURE",
+    "SWAYSOCK",
 ];
 
 /// Browsers whose launcher accepts `--new-window <url>` (Chromium and Firefox

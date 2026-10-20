@@ -43,12 +43,15 @@ jobs:
           fi
 
   tarball:
-    name: Linux binaries (x86_64)
+    name: Linux binaries, .deb and .rpm (x86_64)
     needs: version
     runs-on: ubuntu-latest
-    # Ubuntu 22.04 keeps the glibc requirement at 2.35, so the binaries also
-    # run on older distributions.
+    # Built on Ubuntu 22.04 so the binaries need no newer glibc than 2.34
+    # (build-linux-packages.sh checks this).
     container: ubuntu:22.04
+    env:
+      NFPM_VERSION: 2.47.0
+      NFPM_SHA256: 0660ca602b2d2d2ae4781a06c692b3eeb9d437ffea05b831d76e41f4a3188783
     steps:
       - name: Build tools
         run: |
@@ -61,10 +64,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
         run: packaging/scripts/build-release-tarball.sh dist
+      - name: Install nfpm
+        run: |
+          archive="nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+          curl -fsSL -o "/tmp/$archive" "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/$archive"
+          echo "$NFPM_SHA256  /tmp/$archive" | sha256sum --check --strict -
+          tar -xzf "/tmp/$archive" -C /usr/local/bin nfpm
+      - name: Packages
+        run: packaging/scripts/build-linux-packages.sh target/release dist
       - uses: actions/upload-artifact@v4
         with:
           name: tarball
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
           if-no-files-found: error
 
   arch:
@@ -84,7 +98,7 @@ jobs:
           useradd -m builder
           chown -R builder: "$GITHUB_WORKSPACE"
           sudo -u builder git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          sudo -u builder packaging/arch/build-local-package.sh
+          sudo -u builder env PACKAGER='donno <donno@donno.de>' packaging/arch/build-local-package.sh
       - uses: actions/upload-artifact@v4
         with:
           name: arch
@@ -133,10 +147,15 @@ jobs:
           curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/install.sh | bash
           \`\`\`
 
-          It installs the Arch package on Arch Linux and its derivatives, and the prebuilt binaries in \`~/.local/bin\` elsewhere. Without the script:
+          It installs the package for your package manager (pacman, apt, dnf or zypper), or the prebuilt binaries in \`~/.local/bin\` elsewhere. Without the script:
 
-          - Arch Linux: \`sudo pacman -U linexus-${version}-1-x86_64.pkg.tar.zst\`
+          - Arch Linux: \`sudo pacman -U ./linexus-${version}-1-x86_64.pkg.tar.zst\`
+          - Debian, Ubuntu: \`sudo apt install ./linexus_${version}-1_amd64.deb\`
+          - Fedora, RHEL: \`sudo dnf install ./linexus-${version}-1.x86_64.rpm\`
+          - openSUSE: \`sudo zypper install --allow-unsigned-rpm ./linexus-${version}-1.x86_64.rpm\`
           - Other distributions: unpack \`linexus-${version}-x86_64-linux.tar.gz\` and run \`packaging/scripts/install-dev.sh --bin-dir bin --start\` inside it.
+
+          The packages need glibc 2.34 or newer (Ubuntu 22.04, Debian 12, Fedora 35, RHEL 9 or newer).
 
           Check the downloads with \`sha256sum -c SHA256SUMS --ignore-missing\`. See [docs/install.md](https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/docs/install.md) for details.
           EOF

@@ -31,7 +31,7 @@ fn engine(runtime: Runtime, scratch: &Scratch) -> Engine {
         dispatcher: Dispatcher::new(true, false, logger.clone(), feedback_tx),
         feedback,
         notifications: None,
-        focus: None,
+        focus: crate::focus::Focus::off(),
         logger,
         state_path: None,
         mode: nexus_ipc::DaemonMode::Emulator,
@@ -296,4 +296,45 @@ fn focus_follow_does_not_cut_a_running_sequence_short() {
     assert_eq!(engine.runtime.profile().id, "terminal");
     engine.tick(t + ms(1_600));
     assert_eq!(engine.runtime.brightness, 77);
+}
+
+fn playing(title: &str, art_url: &str) -> Option<nexus_sensors::MediaState> {
+    Some(nexus_sensors::MediaState {
+        identity: "Spotify".into(),
+        title: title.into(),
+        artist: "Artist".into(),
+        art_url: Some(art_url.into()),
+        playing: true,
+        ..Default::default()
+    })
+}
+
+/// The track overlay names the track that starts, not the one that ended.
+#[test]
+fn track_overlay_shows_the_new_track() {
+    let scratch = Scratch::new("track-overlay");
+    let mut config = nexus_config::default_config();
+    config.profiles[0].pages = vec![page("a", vec![button("a", set(10))])];
+    let mut engine = engine(Runtime::from_config(config, None), &scratch);
+    let t = Instant::now();
+    engine
+        .metrics
+        .set_media(playing("First", "file:///first.png"));
+    engine.tick(t);
+    engine.frame(t);
+    assert!(engine.scene.overlay().is_none());
+
+    engine
+        .metrics
+        .set_media(playing("Second", "file:///second.png"));
+    engine.tick(t + ms(1_000));
+    match engine.scene.overlay() {
+        Some(Overlay::NowPlaying(media)) => assert_eq!(media.title, "Second"),
+        other => panic!("expected the track overlay, got {other:?}"),
+    }
+    engine.frame(t + ms(1_020));
+    match engine.scene.overlay() {
+        Some(Overlay::NowPlaying(media)) => assert_eq!(media.title, "Second"),
+        other => panic!("expected the track overlay, got {other:?}"),
+    }
 }

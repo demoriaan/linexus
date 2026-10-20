@@ -160,6 +160,14 @@ impl MetricsHandle {
         lock(&self.shared.latest).snapshot = Arc::new(MetricsSnapshot::collect());
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_media(&self, media: Option<nexus_sensors::MediaState>) {
+        lock(&self.shared.latest).snapshot = Arc::new(MetricsSnapshot {
+            media,
+            ..MetricsSnapshot::default()
+        });
+    }
+
     /// Asks the worker for a fresh snapshot now instead of at its next tick.
     pub(crate) fn request_refresh(&self) {
         lock(&self.shared.control).refresh = true;

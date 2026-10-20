@@ -11,7 +11,11 @@ pub use providers::apps::{
     list_applications, resolve_icon, running_programs, running_targets, AppEntry,
 };
 pub use providers::command::run_command_capture;
-pub use providers::focus::{FocusWatcher, FocusedWindow};
+pub use providers::focus::{
+    gnome_extension_dir, gnome_focus_path, gnome_shell_major, gnome_shell_on_bus, gsettings_get,
+    is_gnome, parse_gnome_shell_major, parse_gsettings_strings, FocusWatcher, FocusedWindow,
+    GnomeExtensionStatus, GNOME_EXTENSION_UUID,
+};
 pub use providers::hass::{
     call_service, entity_is_on, fetch_states, parse_states, toggle_service, EntityState,
     HomeAssistantServer,
@@ -1920,7 +1924,7 @@ fn collect_core_metrics_into(metrics: &mut SystemMetrics) {
     // amdgpu publishes load and VRAM in sysfs; rocm-smi is a Python program
     // costing ~0.2 s of CPU per call, so it is only a throttled fallback.
     let rocm = read_amdgpu_sysfs(Path::new("/sys/class/drm")).or_else(read_rocm_smi_throttled);
-    let (volume_percent, volume_muted) = read_pipewire_volume();
+    let (volume_percent, volume_muted) = read_volume();
     let (media, mpris_players) = providers::media::current_media_and_players(None);
 
     metrics.cpu_usage = cpu_usage;
@@ -2384,6 +2388,15 @@ fn read_number(path: PathBuf) -> Option<i64> {
     fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
+/// Level and mute state of the default output: through `wpctl` on
+/// PipeWire, otherwise through PulseAudio's `pactl`.
+fn read_volume() -> (Option<u8>, Option<bool>) {
+    match read_pipewire_volume() {
+        (None, _) => read_pulseaudio_volume(),
+        found => found,
+    }
+}
+
 /// Level and mute state of the default sink from one `wpctl` call.
 fn read_pipewire_volume() -> (Option<u8>, Option<bool>) {
     let Some(output) = run_command_timeout(
@@ -2396,6 +2409,44 @@ fn read_pipewire_volume() -> (Option<u8>, Option<bool>) {
     };
     let text = String::from_utf8_lossy(&output.stdout);
     (parse_wpctl_volume(&text), parse_wpctl_muted(&text))
+}
+
+fn read_pulseaudio_volume() -> (Option<u8>, Option<bool>) {
+    // pactl translates its output; "Mute: yes" needs the C locale.
+    let pactl = |args: &[&str]| {
+        let mut full = vec!["LC_ALL=C", "pactl"];
+        full.extend_from_slice(args);
+        run_command_timeout(Path::new("env"), &full, Duration::from_millis(750))
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+    };
+    let Some(volume) =
+        pactl(&["get-sink-volume", "@DEFAULT_SINK@"]).and_then(|text| parse_pactl_volume(&text))
+    else {
+        return (None, None);
+    };
+    let muted =
+        pactl(&["get-sink-mute", "@DEFAULT_SINK@"]).and_then(|text| parse_pactl_muted(&text));
+    (Some(volume), muted)
+}
+
+/// `Volume: front-left: 26214 /  40% / -23.88 dB,   front-right: …` → 40;
+/// the loudest channel counts, and levels above 100 % are kept as with wpctl.
+pub fn parse_pactl_volume(input: &str) -> Option<u8> {
+    input
+        .split_whitespace()
+        .filter_map(|part| part.strip_suffix('%')?.parse::<u32>().ok())
+        .max()
+        .map(|percent| percent.min(u32::from(u8::MAX)) as u8)
+}
+
+/// `Mute: yes` → true, `Mute: no` → false.
+pub fn parse_pactl_muted(input: &str) -> Option<bool> {
+    match input.trim().strip_prefix("Mute:")?.trim() {
+        "yes" => Some(true),
+        "no" => Some(false),
+        _ => None,
+    }
 }
 
 /// `Volume: 0.42` → 42. Levels above 100 % (PipeWire allows 150 % and more)
@@ -2857,6 +2908,23 @@ mod tests {
         assert_eq!(parse_wpctl_volume("Volume: 1.20 [MUTED]\n"), Some(120));
         assert_eq!(parse_wpctl_volume("Volume: 1.50\n"), Some(150));
         assert_eq!(parse_wpctl_volume("Volume: 9.00\n"), Some(255));
+    }
+
+    #[test]
+    fn parses_pactl_volume_and_mute_state() {
+        let stereo = "Volume: front-left: 26214 /  40% / -23.88 dB,   front-right: 28180 /  43% / -21.99 dB\n        balance 0.07\n";
+        assert_eq!(parse_pactl_volume(stereo), Some(43));
+        assert_eq!(
+            parse_pactl_volume("Volume: mono: 98304 / 150% / 10.57 dB\n"),
+            Some(150)
+        );
+        assert_eq!(
+            parse_pactl_volume("Connection failure: Connection refused\n"),
+            None
+        );
+        assert_eq!(parse_pactl_muted("Mute: yes\n"), Some(true));
+        assert_eq!(parse_pactl_muted("Mute: no\n"), Some(false));
+        assert_eq!(parse_pactl_muted("Stumm: ja\n"), None);
     }
 
     #[test]

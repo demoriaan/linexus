@@ -6,10 +6,10 @@
 //! - KDE Plasma: a tiny KWin script prints focus changes; KWin's output
 //!   lands in the user journal, which is followed. No polling.
 //! - Hyprland and Sway: their IPC tools are polled.
+//! - GNOME: focus is visible only to shell extensions, so the Linexus focus
+//!   extension (installed by `linexusctl gnome-extension install`) writes it
+//!   to a file, which is polled.
 //! - Other X11 sessions: `xprop` on the root window is polled.
-//!
-//! GNOME on Wayland exposes focus only to shell extensions and is not
-//! supported.
 
 use std::io::{BufRead, BufReader};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
@@ -24,6 +24,11 @@ use std::time::Duration;
 const MARKER: &str = "nexus-focus\t";
 const SCRIPT_NAME: &str = "nexus-focus";
 const POLL: Duration = Duration::from_millis(700);
+
+/// UUID of the GNOME Shell extension that reports focus changes.
+pub const GNOME_EXTENSION_UUID: &str = "linexus-focus@demoriaan.github.io";
+/// The file the GNOME extension writes, below `$XDG_RUNTIME_DIR/linexus`.
+pub const GNOME_FOCUS_FILE: &str = "gnome-focus.json";
 
 // Window properties are chosen by the application, so they are printed JSON
 // encoded: a newline or marker inside an app id or class cannot start a fake
@@ -80,7 +85,7 @@ pub struct FocusWatcher {
 
 impl FocusWatcher {
     /// Starts the watcher that fits the running desktop, or `None` when
-    /// there is none (GNOME Wayland, no session). `session_env` are the
+    /// there is none (no session, or an unknown Wayland desktop). `session_env` are the
     /// graphical-session variables (DISPLAY, XDG_CURRENT_DESKTOP, ...).
     pub fn start(
         session_env: Vec<(String, String)>,
@@ -103,6 +108,11 @@ impl FocusWatcher {
                 "hyprland"
             } else if !var("SWAYSOCK").is_empty() && crate::which("swaymsg").is_some() {
                 "sway"
+            } else if is_gnome(&desktop)
+                && gnome_shell_on_bus(&session_env)
+                && (var("XDG_SESSION_TYPE") != "x11" || gnome_extension_dir().is_some())
+            {
+                "gnome"
             } else if var("XDG_SESSION_TYPE") == "x11"
                 && !var("DISPLAY").is_empty()
                 && crate::which("xprop").is_some()
@@ -251,7 +261,14 @@ fn watch_kwin(
     if let Ok(mut slot) = child.lock() {
         *slot = Some(journal);
     }
-    load_kwin_script(env, script);
+    // At login the session environment can arrive before KWin answers on
+    // the bus, so loading is retried for a minute.
+    for _ in 0..30 {
+        if stop.load(Ordering::SeqCst) || load_kwin_script(env, script) {
+            break;
+        }
+        thread::sleep(Duration::from_secs(2));
+    }
     let mut last = None;
     for line in BufReader::new(stdout).lines() {
         if stop.load(Ordering::SeqCst) {
@@ -269,7 +286,8 @@ fn watch_kwin(
     }
 }
 
-fn load_kwin_script(env: &[(String, String)], script: &Path) {
+/// Loads and starts the focus script; false when KWin did not take it.
+fn load_kwin_script(env: &[(String, String)], script: &Path) -> bool {
     let _ = kwin_call(
         env,
         "/Scripting",
@@ -285,19 +303,18 @@ fn load_kwin_script(env: &[(String, String)], script: &Path) {
             &format!("string:{SCRIPT_NAME}"),
         ],
     ) else {
-        return;
+        return false;
     };
     let Some(id) = reply
         .split_whitespace()
         .last()
         .and_then(|n| n.parse::<i64>().ok())
     else {
-        return;
+        return false;
     };
     // Plasma 6 exposes scripts under /Scripting/ScriptN, Plasma 5 under /N.
-    if kwin_call(env, &format!("/Scripting/Script{id}"), "run", &[]).is_none() {
-        let _ = kwin_call(env, &format!("/{id}"), "run", &[]);
-    }
+    kwin_call(env, &format!("/Scripting/Script{id}"), "run", &[]).is_some()
+        || kwin_call(env, &format!("/{id}"), "run", &[]).is_some()
 }
 
 /// `nexus-focus\t["<app id>","<class>"]` as KWin logs the script's output
@@ -328,6 +345,7 @@ fn poll(backend: &str, env: &[(String, String)], stop: &AtomicBool, tx: &Sender<
             "sway" => {
                 output(env, "swaymsg", &["-t", "get_tree", "-r"]).and_then(|j| parse_sway(&j))
             }
+            "gnome" => gnome_focus(),
             _ => x11_focus(env),
         };
         if let Some(window) = window {
@@ -351,6 +369,192 @@ fn output(env: &[(String, String)], program: &str, args: &[&str]) -> Option<Stri
     out.status
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Whether `XDG_CURRENT_DESKTOP` (upper case) names GNOME, such as `GNOME`
+/// or Ubuntu's `ubuntu:GNOME`.
+pub fn is_gnome(desktop: &str) -> bool {
+    desktop.split(':').any(|d| d == "GNOME")
+}
+
+/// Whether GNOME Shell owns its name on the session bus. Budgie, GNOME
+/// Flashback and others also put `GNOME` into `XDG_CURRENT_DESKTOP`, but run
+/// no GNOME Shell that could load the extension.
+pub fn gnome_shell_on_bus(env: &[(String, String)]) -> bool {
+    // busctl comes with systemd; dbus-send is in a separate package on some
+    // distributions (dbus-tools on Fedora).
+    let mut ask = if crate::which("busctl").is_some() {
+        let mut busctl = command("busctl", env);
+        busctl.args([
+            "--user",
+            "--timeout=2",
+            "call",
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "NameHasOwner",
+            "s",
+            "org.gnome.Shell",
+        ]);
+        busctl
+    } else {
+        let mut dbus_send = command("dbus-send", env);
+        dbus_send.args([
+            "--session",
+            "--reply-timeout=2000",
+            "--print-reply=literal",
+            "--dest=org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus.NameHasOwner",
+            "string:org.gnome.Shell",
+        ]);
+        dbus_send
+    };
+    ask.stderr(Stdio::null()).output().is_ok_and(|out| {
+        out.status.success() && String::from_utf8_lossy(&out.stdout).contains("true")
+    })
+}
+
+/// What doctor and Studio report about the GNOME focus extension.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GnomeExtensionStatus {
+    /// Major version of the installed GNOME Shell.
+    pub shell: Option<u32>,
+    pub dir: Option<PathBuf>,
+    /// The installed metadata lists that GNOME Shell version.
+    pub supports_shell: bool,
+    /// Listed in `org.gnome.shell enabled-extensions`.
+    pub enabled: bool,
+    /// `org.gnome.shell disable-user-extensions` is on.
+    pub user_extensions_off: bool,
+    /// GNOME Shell runs it: its focus file exists.
+    pub running: bool,
+}
+
+impl GnomeExtensionStatus {
+    pub fn read() -> Self {
+        let shell = gnome_shell_major();
+        let dir = gnome_extension_dir();
+        let supports_shell = match (&dir, shell) {
+            (Some(dir), Some(major)) => std::fs::read_to_string(dir.join("metadata.json"))
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .and_then(|meta| meta.get("shell-version")?.as_array().cloned())
+                .is_some_and(|versions| {
+                    versions
+                        .iter()
+                        .any(|v| v.as_str() == Some(major.to_string().as_str()))
+                }),
+            _ => false,
+        };
+        Self {
+            shell,
+            dir,
+            supports_shell,
+            enabled: gsettings_get("enabled-extensions").is_some_and(|list| {
+                parse_gsettings_strings(&list)
+                    .iter()
+                    .any(|u| u == GNOME_EXTENSION_UUID)
+            }),
+            user_extensions_off: gsettings_get("disable-user-extensions").as_deref()
+                == Some("true"),
+            running: gnome_focus_path().is_some_and(|path| path.is_file()),
+        }
+    }
+
+    /// Installed, fit for the installed GNOME Shell and enabled.
+    pub fn complete(&self) -> bool {
+        self.dir.is_some() && self.supports_shell && self.enabled && !self.user_extensions_off
+    }
+}
+
+/// Major version of the installed GNOME Shell (`GNOME Shell 50.6` → 50).
+pub fn gnome_shell_major() -> Option<u32> {
+    let output = crate::providers::command::run_output(
+        &crate::which("gnome-shell")?,
+        &["--version"],
+        Duration::from_secs(3),
+    )
+    .ok()?;
+    parse_gnome_shell_major(&String::from_utf8_lossy(&output.stdout))
+}
+
+pub fn parse_gnome_shell_major(text: &str) -> Option<u32> {
+    text.trim()
+        .strip_prefix("GNOME Shell ")?
+        .split('.')
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// `gsettings get org.gnome.shell <key>`, trimmed.
+pub fn gsettings_get(key: &str) -> Option<String> {
+    let output = crate::providers::command::run_output(
+        &crate::which("gsettings")?,
+        &["get", "org.gnome.shell", key],
+        Duration::from_secs(3),
+    )
+    .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// `['a@b', 'c@d']` or `@as []` → the strings. Extension UUIDs contain no
+/// quotes; callers that write a list back refuse one whose values do.
+pub fn parse_gsettings_strings(text: &str) -> Vec<String> {
+    text.split('\'')
+        .skip(1)
+        .step_by(2)
+        .map(str::to_string)
+        .collect()
+}
+
+/// Directory of the installed GNOME focus extension, for this user or for
+/// everyone.
+pub fn gnome_extension_dir() -> Option<PathBuf> {
+    let user_data = std::env::var_os("XDG_DATA_HOME")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")));
+    user_data
+        .into_iter()
+        .chain([PathBuf::from("/usr/share")])
+        .map(|data| {
+            data.join("gnome-shell/extensions")
+                .join(GNOME_EXTENSION_UUID)
+        })
+        .find(|dir| dir.join("metadata.json").is_file())
+}
+
+/// Path of the file the GNOME extension writes, when the directory it lies in
+/// is private to this user.
+pub fn gnome_focus_path() -> Option<PathBuf> {
+    let dir = PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?).join("linexus");
+    private_dir(&dir).then(|| dir.join(GNOME_FOCUS_FILE))
+}
+
+fn gnome_focus() -> Option<FocusedWindow> {
+    parse_gnome_focus(&std::fs::read_to_string(gnome_focus_path()?).ok()?)
+}
+
+/// `["org.gnome.TextEditor.desktop","org.gnome.TextEditor"]` as the GNOME
+/// extension writes it. GNOME names windows without a desktop entry
+/// `window:<n>`; those keep only their class.
+pub fn parse_gnome_focus(text: &str) -> Option<FocusedWindow> {
+    let (app_id, class): (String, String) = serde_json::from_str(text.trim()).ok()?;
+    let app_id = if app_id.starts_with("window:") {
+        String::new()
+    } else {
+        app_id.trim_end_matches(".desktop").to_string()
+    };
+    (!app_id.is_empty() || !class.is_empty()).then(|| FocusedWindow {
+        app_id,
+        class,
+        title: String::new(),
+    })
 }
 
 pub fn parse_hyprland(json: &str) -> Option<FocusedWindow> {
@@ -525,6 +729,24 @@ mod tests {
             title: String::new(),
         };
         assert!(steam.matches("steam.desktop"));
+    }
+
+    #[test]
+    fn parses_the_gnome_extension_file() {
+        let window =
+            parse_gnome_focus("[\"org.gnome.TextEditor.desktop\",\"org.gnome.TextEditor\"]\n")
+                .unwrap();
+        assert_eq!(window.app_id, "org.gnome.TextEditor");
+        assert_eq!(window.class, "org.gnome.TextEditor");
+        assert!(window.matches("org.gnome.TextEditor.desktop"));
+        assert!(window.matches("texteditor"));
+        let unknown = parse_gnome_focus("[\"window:12\",\"steam_app_570\"]").unwrap();
+        assert_eq!(unknown.app_id, "");
+        assert_eq!(unknown.class, "steam_app_570");
+        assert_eq!(parse_gnome_focus("[\"\",\"\"]"), None);
+        assert_eq!(parse_gnome_focus("not json"), None);
+        assert!(is_gnome("UBUNTU:GNOME"));
+        assert!(!is_gnome("KDE"));
     }
 
     #[test]

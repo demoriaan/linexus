@@ -9,7 +9,7 @@ Linexus consists of four programs:
 | `linexusctl` | Command line tool for setup checks, diagnostics, previews and controlling the daemon. |
 | `linexus-inputd` | Optional helper that types keyboard shortcuts and text. See [input-helper.md](input-helper.md). |
 
-Tested on Arch Linux with KDE Plasma (Wayland).
+The strip itself is tested on Arch Linux with KDE Plasma (Wayland). The installer and the packages are tested in containers on Ubuntu 22.04 and 24.04, Debian 12 and 13, Fedora 44, Rocky Linux 9, openSUSE Tumbleweed and Arch Linux, and the GNOME focus extension with GNOME Shell 42, 46 and 48.
 
 ## Requirements
 
@@ -34,7 +34,7 @@ Optional desktop tools. Without them only the matching features stop working; `l
 | Tool | Usually packaged as | Used for |
 |---|---|---|
 | `xdg-open` | xdg-utils | Opening links and files, launching apps |
-| `wpctl` | wireplumber | Volume, volume widget, microphone mute |
+| `wpctl` or `pactl` | wireplumber (PipeWire), or pulseaudio-utils (PulseAudio) | Volume, volume widget, microphone mute. `wpctl` is used when both exist. |
 | `busctl` | systemd | Media controls (MPRIS), sleep detection |
 | `curl` | curl | Feeds, weather, Home Assistant, web request actions |
 | `dbus-monitor` | dbus | Showing desktop notifications on the strip |
@@ -52,34 +52,47 @@ curl -fsSL https://github.com/demoriaan/linexus/releases/latest/download/install
 
 The script fetches the files of the latest [release](https://github.com/demoriaan/linexus/releases) into `~/.cache/linexus/installer/<version>/` and checks them against the release's `SHA256SUMS`, which catches broken downloads. Then:
 
-- **With `pacman`** (Arch Linux and its derivatives) it installs the package from Option 1 with `sudo pacman -U`. After that it writes or upgrades your config and enables and starts `linexusd.service` for your user.
+- **With a package manager it knows** it installs the matching package from Option 1 through `sudo`: `pacman` on Arch Linux, `apt-get` on Debian and Ubuntu, `dnf` on Fedora and RHEL, `zypper` on openSUSE, and their derivatives. After that it writes or upgrades your config and enables and starts `linexusd.service` for your user.
 - **Otherwise** it unpacks the prebuilt binaries and runs Option 2's `install-dev.sh --bin-dir` from inside them. That puts the programs in `~/.local/bin` and installs the udev rule through `sudo`. No Rust toolchain is needed.
+- **When `~/.local/bin` already holds an install** and no package is installed, it updates that install in place instead of adding a package next to it. To switch to the package, run it with `--uninstall` first.
 
 It ends with `linexusctl doctor`. Running it again is safe, for example to update to a new release. To pass options, download it first, or use `... | bash -s -- --help`:
 
 | Option | Effect |
 |---|---|
 | `--version X.Y.Z` | Install this release instead of the latest one |
-| `--method auto\|arch\|tarball` | `auto` picks `arch` when `pacman` exists |
+| `--method auto\|arch\|deb\|rpm\|tarball` | `auto` picks the package for this system's package manager, as described above |
 | `--from DIR` | Use release files already downloaded to `DIR` |
 | `--no-root` | Never call `sudo`; print the commands that need root instead |
 | `--no-start` | Enable the daemon, but do not start it now |
 | `--input-helper` | Also enable the input helper for keyboard shortcut and text actions |
 | `--uninstall` | Remove Linexus; your config stays |
 
-Exit codes: `0` done, `1` error, `2` unknown option, `3` root steps still open. With `3` it prints the commands that need root: with `--no-root`, or when `sudo` needs a password and there is no terminal to ask on. Run them, then run the installer again. On Arch nothing is installed until then, because the root step is the package itself. [ai-agents.md](ai-agents.md) describes the same flow for coding agents.
+Exit codes: `0` done, `1` error, `2` unknown option, `3` root steps still open. With `3` it prints the commands that need root: with `--no-root`, or when `sudo` needs a password and there is no terminal to ask on. Run them, then run the installer again. With a package nothing is installed until then, because the root step is the package itself. [ai-agents.md](ai-agents.md) describes the same flow for coding agents.
 
-The binaries in the tarball are built on Ubuntu 22.04 and need glibc 2.35 or newer. On derivatives whose glibc lags behind Arch, use `--method tarball`.
+The binaries in the `.deb`, the `.rpm` and the tarball are built on Ubuntu 22.04 and need glibc 2.34 or newer: Ubuntu 22.04, Debian 12, Fedora 35, RHEL 9 and their derivatives, or newer releases. On older systems the installer stops with a message; build from source there. On Arch derivatives whose glibc lags behind Arch, use `--method tarball`.
 
-## Option 1: Arch Linux package
+## Option 1: package
 
-Download `linexus-<version>-1-x86_64.pkg.tar.zst` from the [latest release](https://github.com/demoriaan/linexus/releases/latest) and install it:
+Download the package for your distribution from the [latest release](https://github.com/demoriaan/linexus/releases/latest) and install it:
+
+| Distribution | Release file | Install command |
+|---|---|---|
+| Arch Linux, Manjaro, EndeavourOS | `linexus-<version>-1-x86_64.pkg.tar.zst` | `sudo pacman -U ./linexus-*-x86_64.pkg.tar.zst` |
+| Debian, Ubuntu, Linux Mint, Pop!_OS | `linexus_<version>-1_amd64.deb` | `sudo apt install ./linexus_*_amd64.deb` |
+| Fedora, RHEL, Rocky, AlmaLinux | `linexus-<version>-1.x86_64.rpm` | `sudo dnf install ./linexus-*.x86_64.rpm` |
+| openSUSE | `linexus-<version>-1.x86_64.rpm` | `sudo zypper install --allow-unsigned-rpm ./linexus-*.x86_64.rpm` |
+
+The packages are not signed; check them against `SHA256SUMS` from the same release with `sha256sum -c SHA256SUMS --ignore-missing`. To update, install the package of the new release the same way.
+
+To build the `.deb` and `.rpm` yourself, build the binaries, then pack them with [nfpm](https://nfpm.goreleaser.com):
 
 ```bash
-sudo pacman -U linexus-*-x86_64.pkg.tar.zst
+cargo build --release --locked -p nexusctl -p nexus-daemon -p nexus-inputd -p nexus-studio
+packaging/scripts/build-linux-packages.sh target/release dist
 ```
 
-Or build it from a checkout of this repository:
+The Arch package builds from a checkout of this repository:
 
 ```bash
 ./packaging/arch/build-local-package.sh
@@ -88,7 +101,7 @@ sudo pacman -U packaging/arch/linexus-*-x86_64.pkg.tar.zst
 
 `build-local-package.sh` packs the committed state of the checkout (`git archive HEAD`) as a source tarball and runs `makepkg -f` with `packaging/arch/PKGBUILD`; uncommitted changes are not included. The build runs `cargo build --release --locked` and the full test suite (`cargo test --release --locked --workspace`). The package lands in `packaging/arch/`.
 
-The package `linexus` installs:
+Every package is called `linexus` and installs:
 
 | Path | Content |
 |---|---|
@@ -102,7 +115,7 @@ The package `linexus` installs:
 | `/usr/share/icons/hicolor/*/apps/io.github.demoriaan.linexus.*` | App icon |
 | `/usr/share/doc/linexus/` | This documentation |
 
-Installing reloads the udev rules. Then, as your desktop user:
+Installing reloads the udev rules, and upgrading restarts a running root input helper. Then, as your desktop user:
 
 1. Unplug and replug the strip.
 2. Start the daemon now and at every login:
@@ -276,13 +289,17 @@ Installed with `install-dev.sh`:
 
 This stops and disables the user services and removes the binaries, user units, launcher, icons and installed docs. Through `sudo` it also removes the udev rule and the root input helper. Add `--no-udev` to skip the `sudo` part. Your config stays unless you add `--purge-config`, which removes `~/.config/linexus/config.json`.
 
-Installed as the Arch package:
+Installed as a package:
 
 ```bash
 systemctl --user disable --now linexusd.service linexus-inputd.service
-sudo systemctl disable --now "linexus-inputd@$(id -u).service"
-sudo pacman -R linexus
+sudo pacman -R linexus     # Arch
+sudo apt remove linexus    # Debian, Ubuntu
+sudo dnf remove linexus    # Fedora, RHEL
+sudo zypper remove linexus # openSUSE
 ```
+
+Removing the package also turns off the root input helper (`linexus-inputd@<uid>.service`).
 
 Neither method removes all per-user data. To remove it as well:
 

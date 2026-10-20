@@ -1,5 +1,6 @@
 mod dispatch;
 mod engine;
+mod focus;
 mod hardware;
 mod ipc;
 mod live;
@@ -119,21 +120,10 @@ fn main() -> Result<()> {
         Some((monitor, rx)) => (Some(monitor), Some(rx)),
         None => (None, None),
     };
-    let focus = (!args.once && args.emulator_output.is_none())
-        .then(|| nexus_sensors::FocusWatcher::start(nexus_actions::session_environment()))
-        .flatten();
-    if let Some((watcher, _)) = &focus {
-        log_fields(
-            &logger,
-            Level::Info,
-            "focus_watch",
-            "watching the focused app",
-            [("backend", watcher.backend().to_string())],
-        );
-    }
-    let (_focus_watcher, focus_rx) = match focus {
-        Some((watcher, rx)) => (Some(watcher), Some(rx)),
-        None => (None, None),
+    let focus = if args.once || args.emulator_output.is_some() {
+        focus::Focus::off()
+    } else {
+        focus::Focus::on()
     };
 
     let (feedback_tx, feedback_rx) = mpsc::channel();
@@ -155,7 +145,7 @@ fn main() -> Result<()> {
         dispatcher,
         feedback: feedback_rx,
         notifications: notification_rx,
-        focus: focus_rx,
+        focus,
         logger: logger.clone(),
         state_path: (!args.once).then_some(state_path),
         mode,

@@ -18,17 +18,26 @@ const UDEV_RULE_PATHS: [&str; 2] = [
 ];
 const UDEV_FIX: &str = "linexusctl print-udev-rule | sudo tee /etc/udev/rules.d/99-linexus.rules \
 >/dev/null && sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=hidraw";
-/// `(program, what it is used for, package that usually ships it)`.
-const BACKENDS: [(&str, &str, &str); 5] = [
-    (
+/// `(program, what it is used for, package that usually ships it)`; each
+/// entry lists alternatives, the first one is suggested when all are missing.
+type Backend = (&'static str, &'static str, &'static str);
+const BACKENDS: [&[Backend]; 5] = [
+    &[(
         "xdg-open",
         "opening links and launching applications",
         "xdg-utils",
-    ),
-    ("wpctl", "volume control through PipeWire", "wireplumber"),
-    ("busctl", "media controls over MPRIS", "systemd"),
-    ("curl", "feeds, weather and Home Assistant", "curl"),
-    ("dbus-monitor", "mirroring desktop notifications", "dbus"),
+    )],
+    &[
+        ("wpctl", "volume control through PipeWire", "wireplumber"),
+        (
+            "pactl",
+            "volume control through PulseAudio",
+            "pulseaudio-utils",
+        ),
+    ],
+    &[("busctl", "media controls over MPRIS", "systemd")],
+    &[("curl", "feeds, weather and Home Assistant", "curl")],
+    &[("dbus-monitor", "mirroring desktop notifications", "dbus")],
 ];
 
 pub fn route(request: &Request, state: &AppState) -> Option<Response> {
@@ -160,11 +169,14 @@ fn health(state: &AppState) -> Response {
     checks.push(daemon_check(state, &status, unit_active));
     checks.push(autostart_check(autostart));
     checks.push(input_helper_check());
-    checks.extend(
-        BACKENDS
+    checks.extend(BACKENDS.iter().map(|alternatives| {
+        let &(program, purpose, package) = alternatives
             .iter()
-            .map(|&(program, purpose, package)| backend_check(program, purpose, package)),
-    );
+            .find(|(program, _, _)| find_in_path(program).is_some())
+            .unwrap_or(&alternatives[0]);
+        backend_check(program, purpose, package)
+    }));
+    checks.extend(gnome_focus_check());
     checks.push(conflict_check());
     let daemon = DaemonFacts {
         reachable: status.is_ok(),
@@ -428,6 +440,64 @@ fn find_in_path(program: &str) -> Option<PathBuf> {
                 .metadata()
                 .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
         })
+}
+
+/// On GNOME, app-aware profiles need the Linexus focus extension.
+fn gnome_focus_check() -> Option<Check> {
+    let env = nexus_actions::session_environment();
+    let desktop = env
+        .iter()
+        .find(|(key, _)| key == "XDG_CURRENT_DESKTOP")
+        .map(|(_, value)| value.to_ascii_uppercase())?;
+    if !nexus_sensors::is_gnome(&desktop) || !nexus_sensors::gnome_shell_on_bus(&env) {
+        return None;
+    }
+    let status = nexus_sensors::GnomeExtensionStatus::read();
+    let install = "linexusctl gnome-extension install";
+    Some(if status.complete() && status.running {
+        check(
+            "gnome.focus",
+            Level::Ok,
+            "The GNOME focus extension runs.",
+            "Profiles can switch with the focused app.",
+        )
+        .key("gnome.focus.ok")
+    } else if status.user_extensions_off {
+        check(
+            "gnome.focus",
+            Level::Warn,
+            "GNOME extensions are turned off.",
+            "Profiles can switch with the focused app only through the Linexus focus extension. Turn extensions on in the Extensions app.",
+        )
+        .fix("gsettings set org.gnome.shell disable-user-extensions false")
+        .key("gnome.focus.extensions_off")
+    } else if status.complete() {
+        check(
+            "gnome.focus",
+            Level::Warn,
+            "The GNOME focus extension does not run yet.",
+            "GNOME Shell loads new extensions at login. Log out and back in.",
+        )
+        .key("gnome.focus.waiting")
+    } else if status.dir.is_none() {
+        check(
+            "gnome.focus",
+            Level::Warn,
+            "The GNOME focus extension is not installed.",
+            "On GNOME, profiles can switch with the focused app only through this small extension. Install it, then log out and back in.",
+        )
+        .fix(install)
+        .key("gnome.focus.missing")
+    } else {
+        check(
+            "gnome.focus",
+            Level::Warn,
+            "The GNOME focus extension is off or does not fit this GNOME version.",
+            "Set it up again, then log out and back in.",
+        )
+        .fix(install)
+        .key("gnome.focus.outdated")
+    })
 }
 
 fn conflict_check() -> Check {

@@ -11,4 +11,7 @@ Restart=on-failure
 RestartSec=2s
 
 [Install]
-WantedBy=default.target
+# default.target starts it with the user manager; graphical-session.target
+# starts it again at the next login when the user manager stayed up
+# (lingering), after PartOf= stopped it at logout.
+WantedBy=default.target graphical-session.target

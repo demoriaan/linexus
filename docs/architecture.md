@@ -21,7 +21,7 @@ A map of the code for contributors: which crate owns what, how the daemon is put
 | `nexus-render` | library | The renderer: a page plus `LiveData` in, a 640 x 48 RGBA `Canvas` out. Widgets, theme palettes, fonts, Lucide icons, overlays, page transitions, PNG encoding. No file, device or network access. | config, core |
 | `nexus-config` | library | Config schema 2: model, validation, defaults and page templates, schema 1 migration, atomic load and save, conversion of `ActionSpec` into desktop actions | actions |
 | `nexus-sensors` | library | Everything the strip displays from outside: `/proc` and sysfs metrics, hwmon, GPU, volume, MPRIS, running and installed apps, batteries, weather, Home Assistant, RSS and Atom feeds, webhooks, desktop notifications, focus watchers, command output, `sensors.json`, MQTT and IFTTT | |
-| `nexus-actions` | library | Plans and runs desktop actions through `xdg-open`, `gtk-launch`, `kioclient`, `wpctl`, `busctl`, `curl`, `loginctl` and the input helper; probes which of these exist; reads the graphical session environment and default applications | input |
+| `nexus-actions` | library | Plans and runs desktop actions through `xdg-open`, `gtk-launch`, `kioclient`, `wpctl` or `pactl`, `busctl`, `curl`, `loginctl` and the input helper; probes which of these exist; reads the graphical session environment and default applications | input |
 | `nexus-input` | library | Input helper protocol: request and response types, socket paths, client | |
 | `nexus-ipc` | library | Daemon API: `Command`, `Response`, `DaemonStatus`, socket path, client | |
 | `nexus-events` | library | JSON Lines event log with rotation | |
@@ -43,7 +43,7 @@ A map of the code for contributors: which crate owns what, how the daemon is put
 | Provider worker | `live.rs` | Fetches slow or remote data, only for widgets the active profile contains |
 | Action worker | `dispatch.rs` | Runs actions one after another from a queue of 64; reports failures back to the engine |
 | Notification monitor | `nexus_sensors::NotificationMonitor` | Follows `dbus-monitor` for desktop notifications |
-| Focus watcher | `nexus_sensors::FocusWatcher` | Reports the focused application (KWin, Hyprland, Sway or X11) |
+| Focus watcher | `nexus_sensors::FocusWatcher` | Reports the focused application (KWin, GNOME, Hyprland, Sway or X11) |
 
 Lock and sleep detection (`session.rs`) is no thread: the main loop polls it at most once per second.
 
@@ -131,7 +131,7 @@ Single taps fire on release unless the widget also has a double-tap meaning; onl
 
 | Data | Source | Refresh |
 |---|---|---|
-| CPU, memory, disk, network, GPU, volume, now playing | `/proc`, sysfs, `wpctl`, `busctl` | Every second, paused while the strip is off |
+| CPU, memory, disk, network, GPU, volume, now playing | `/proc`, sysfs, `wpctl` or `pactl`, `busctl` | Every second, paused while the strip is off |
 | AMD GPU via `rocm-smi` | `rocm-smi`, where sysfs has no values | At most every 5 s |
 | hwmon sensors | `/sys/class/hwmon` | Cached 5 s |
 | Running applications (button dots) | `/proc` | Cached 5 s |

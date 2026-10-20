@@ -4,6 +4,7 @@ mod daemon_cmd;
 mod device;
 mod doctor;
 mod fix;
+mod gnome_cmd;
 mod metrics;
 mod pack_cmd;
 mod preview;
@@ -109,6 +110,12 @@ enum Command {
         #[command(subcommand)]
         command: daemon_cmd::DaemonCommand,
     },
+    /// Install the GNOME Shell extension that app-aware profiles need on
+    /// GNOME.
+    GnomeExtension {
+        #[command(subcommand)]
+        command: gnome_cmd::GnomeExtensionCommand,
+    },
     /// Export, inspect or import shareable .nexuspack files.
     Pack {
         #[command(subcommand)]
@@ -172,6 +179,7 @@ fn main() -> Result<()> {
             socket_path,
             command,
         } => daemon_cmd::run(command, socket_path),
+        Command::GnomeExtension { command } => gnome_cmd::run(command),
         Command::Pack { command } => pack_cmd::run_pack(command),
         Command::RenderPreview(args) => preview::run(args),
     }

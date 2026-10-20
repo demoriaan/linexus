@@ -2,6 +2,29 @@
 
 All notable changes to this project are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [semantic versioning](https://semver.org/).
 
+## [1.1.0] - 2026-10-20
+
+### Added
+
+- `.deb` package for Debian, Ubuntu and their derivatives, and `.rpm` package for Fedora, RHEL and openSUSE, in every release. Like the Arch package, they install the programs, the device rule and the services system-wide, so there is a single root step.
+- The one-line installer uses them: it installs the package through `apt-get`, `dnf` or `zypper` where one of them exists (`--method deb` or `--method rpm` to choose), keeps updating an existing `~/.local` install in place, and removes the package again with `--uninstall`.
+- Volume, the volume widget and microphone mute also work through PulseAudio's `pactl` when PipeWire's `wpctl` is missing, for example on Ubuntu 22.04 and Linux Mint 21.
+- App-aware profiles on GNOME (GNOME Shell 40 and newer), through a small GNOME Shell extension that reports the focused app. `linexusctl gnome-extension install|remove|status` manages it; the installer sets it up on GNOME, and `linexusctl doctor` and Studio's setup checks report it.
+
+### Changed
+
+- The installer installs to `~/.local` on image-based systems with a read-only `/usr` (Fedora Silverblue, Kinoite and Bazzite, openSUSE Aeon and MicroOS, SteamOS), where a package cannot be installed the usual way.
+- `linexusd.service` is also started by `graphical-session.target`, so it comes back at the next login when the systemd user manager stayed running in between. Run the installer, or `systemctl --user reenable linexusd.service`, to apply this to an existing install.
+- The installer checks the glibc version before it downloads the programs and names the problem on systems older than glibc 2.34. It no longer needs `awk`.
+- Removing a package (Arch, deb or rpm) also turns off the root input helper, and upgrading one restarts it.
+- The Arch package build uses the same staging script as the `.deb` and `.rpm` (`packaging/scripts/stage-root.sh`); its contents are unchanged.
+- [docs/ai-agents.md](docs/ai-agents.md) no longer names a specific agent tool.
+
+### Fixed
+
+- App-aware profiles did not switch after a fresh login: the daemon starts before the desktop announces itself and looked for the focus source only once. It now keeps looking until it finds one, and waits for KWin to accept its script.
+- The overlay that appears when the track changes showed the track that had just ended instead of the new one. It also shows the new cover as soon as it has loaded.
+
 ## [1.0.1] - 2026-10-19
 
 ### Added

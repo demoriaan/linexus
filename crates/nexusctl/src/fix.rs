@@ -28,6 +28,7 @@ pub(crate) fn run(dry_run: bool) -> Result<()> {
     fix_user_service(dry_run)?;
     fix_input_helper(dry_run)?;
     fix_udev_rule(dry_run)?;
+    fix_gnome_extension(dry_run);
     println!("After udev changes, unplug and replug the Nexus.");
     println!();
     Ok(())
@@ -276,10 +277,29 @@ fn fix_udev_rule(dry_run: bool) -> Result<()> {
     Ok(())
 }
 
+fn fix_gnome_extension(dry_run: bool) {
+    if !crate::gnome_cmd::gnome_session() {
+        return;
+    }
+    let status = nexus_sensors::GnomeExtensionStatus::read();
+    let installed = status.dir.is_some() && status.supports_shell && status.enabled;
+    if installed {
+        println!("GNOME focus extension: OK");
+        if status.user_extensions_off {
+            println!("GNOME focus extension: GNOME has extensions turned off; turn them on in the Extensions app");
+        }
+    } else if dry_run {
+        println!("GNOME focus extension: would install and enable it");
+    } else if let Err(error) = crate::gnome_cmd::install() {
+        println!("GNOME focus extension: {error:#}");
+    }
+}
+
+/// The packaged user unit, pointed at `daemon`.
 pub(crate) fn user_service_text(daemon: &Path) -> String {
-    format!(
-        "[Unit]\nDescription=iCUE Nexus user daemon\nAfter=graphical-session.target dbus.service\nPartOf=graphical-session.target\n\n[Service]\nType=simple\nExecStart={}\nRestart=on-failure\nRestartSec=2s\n\n[Install]\nWantedBy=default.target\n",
-        daemon.display()
+    include_str!("../../../packaging/systemd/user/linexusd.service").replace(
+        "ExecStart=%h/.local/bin/linexusd",
+        &format!("ExecStart={}", daemon.display()),
     )
 }
 
@@ -296,4 +316,17 @@ fn input_helper_allow_uid() -> u32 {
         .ok()
         .and_then(|uid| uid.parse().ok())
         .unwrap_or_else(current_uid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_service_points_at_the_given_daemon() {
+        let text = user_service_text(Path::new("/opt/linexus/bin/linexusd"));
+        assert!(text.contains("\nExecStart=/opt/linexus/bin/linexusd\n"));
+        assert!(!text.contains("%h/.local/bin/linexusd"));
+        assert!(text.contains("WantedBy=default.target graphical-session.target"));
+    }
 }

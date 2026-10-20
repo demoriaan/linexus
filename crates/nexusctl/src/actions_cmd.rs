@@ -42,7 +42,7 @@ pub(crate) enum ActionCommand {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Change the PipeWire volume through wpctl.
+    /// Change the volume through wpctl (PipeWire) or pactl (PulseAudio).
     Volume {
         command: CliVolumeCommand,
         #[arg(long, default_value_t = 5)]
@@ -163,10 +163,7 @@ fn print_action_backends() {
         }
     );
     println!("launch apps: {}", yes_no(status.supports_launch()));
-    println!(
-        "PipeWire volume / mic mute: {}",
-        yes_no(status.supports_volume())
-    );
+    println!("Volume / mic mute: {}", yes_no(status.supports_volume()));
     println!("MPRIS media: {}", yes_no(status.supports_mpris()));
     println!(
         "HTTP requests (curl): {}",
@@ -201,6 +198,7 @@ fn print_action_backends() {
         ("gtk-launch", &status.gtk_launch),
         ("kioclient", &status.kioclient),
         ("wpctl", &status.wpctl),
+        ("pactl", &status.pactl),
         ("busctl", &status.busctl),
         ("systemd-run", &status.systemd_run),
     ] {

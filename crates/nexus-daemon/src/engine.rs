@@ -42,7 +42,7 @@ pub(crate) struct Engine {
     dispatcher: Dispatcher,
     feedback: Receiver<Feedback>,
     notifications: Option<Receiver<nexus_sensors::Notification>>,
-    focus: Option<Receiver<nexus_sensors::FocusedWindow>>,
+    focus: crate::focus::Focus,
     /// Profile to return to when the app that switched profiles loses focus.
     auto_return_profile: Option<String>,
     logger: nexus_events::EventLogger,
@@ -70,7 +70,7 @@ pub(crate) struct EngineParts {
     pub(crate) dispatcher: Dispatcher,
     pub(crate) feedback: Receiver<Feedback>,
     pub(crate) notifications: Option<Receiver<nexus_sensors::Notification>>,
-    pub(crate) focus: Option<Receiver<nexus_sensors::FocusedWindow>>,
+    pub(crate) focus: crate::focus::Focus,
     pub(crate) logger: nexus_events::EventLogger,
     pub(crate) state_path: Option<PathBuf>,
     pub(crate) mode: nexus_ipc::DaemonMode,
@@ -734,13 +734,7 @@ impl Engine {
             self.toast("alert-triangle", text, now);
         }
 
-        let mut focused = None;
-        if let Some(receiver) = &self.focus {
-            while let Ok(window) = receiver.try_recv() {
-                focused = Some(window);
-            }
-        }
-        if let Some(window) = focused {
+        if let Some(window) = self.focus.poll(&self.logger) {
             self.follow_focus(&window, now);
         }
 
@@ -807,6 +801,9 @@ impl Engine {
                 && settings.overlays.now_playing
                 && !self.page_shows(|k| matches!(k, WidgetKind::Media(_)))
             {
+                // The live data otherwise takes the snapshot in only at the
+                // next frame and would still name the previous track.
+                self.live.absorb(&snapshot);
                 let live = self.live.build(&settings, &self.providers.provided());
                 if let Some(media) = live.media {
                     self.scene.show_overlay(
@@ -882,6 +879,10 @@ impl Engine {
                         .insert(widget.id.clone(), self.timers.info(&key, props, now));
                 }
             }
+        }
+        if let Some(media) = &live.media {
+            // The cover of a new track usually arrives after its overlay.
+            self.scene.refresh_now_playing(media);
         }
         let canvas = self.scene.compose(&self.runtime, &live, now);
         self.last_frame = Some(canvas.rgba().to_vec());

@@ -200,11 +200,20 @@ The daemon needs a way to learn which window has focus. It picks one when it sta
 | KDE Plasma | `XDG_CURRENT_DESKTOP` contains `KDE` | A small KWin script reports focus changes to the user journal, which the daemon follows. No polling. | `dbus-send`, `journalctl` |
 | Hyprland | `HYPRLAND_INSTANCE_SIGNATURE` is set | `hyprctl activewindow -j`, every 0.7 seconds | `hyprctl` |
 | Sway | `SWAYSOCK` is set | `swaymsg -t get_tree`, every 0.7 seconds | `swaymsg` |
+| GNOME | `XDG_CURRENT_DESKTOP` contains `GNOME` and GNOME Shell is on the session bus (on X11 only when the extension is installed) | The Linexus focus extension writes the focused app to `$XDG_RUNTIME_DIR/linexus/gnome-focus.json`; the daemon reads it every 0.7 seconds | GNOME Shell 40 or newer, the extension |
 | Other X11 desktops | `XDG_SESSION_TYPE` is `x11` and `DISPLAY` is set | `xprop` on the root window, every 0.7 seconds | `xprop` |
 
-GNOME on Wayland only tells shell extensions which window has focus, so it is not supported.
+GNOME tells only shell extensions which window has focus. The installer sets up the small Linexus focus extension on GNOME; to do it yourself:
 
-`XDG_CURRENT_DESKTOP`, `XDG_SESSION_TYPE` and `DISPLAY` are read from the systemd user manager (`systemctl --user show-environment`). `HYPRLAND_INSTANCE_SIGNATURE` and `SWAYSOCK` must be in the daemon's own environment; import them into the user manager from your compositor's startup, for example with `systemctl --user import-environment HYPRLAND_INSTANCE_SIGNATURE`, and restart the daemon. The event log records the chosen method as `focus_watch`:
+```bash
+linexusctl gnome-extension install
+```
+
+It writes the extension to `~/.local/share/gnome-shell/extensions/linexus-focus@demoriaan.github.io/`, in the format for your GNOME Shell version, and adds it to `enabled-extensions`. GNOME Shell loads new extensions at login, so log out and back in once. `linexusctl gnome-extension status` shows whether it runs; `linexusctl gnome-extension remove` takes it out again. After a GNOME upgrade to a version the extension does not list yet, `linexusctl doctor --fix` installs it again.
+
+The daemon usually starts before the desktop has announced itself. Until it finds a desktop it knows, it checks again in the background, every 5 seconds for two minutes and every 30 seconds after that.
+
+`XDG_CURRENT_DESKTOP`, `XDG_SESSION_TYPE`, `DISPLAY`, `HYPRLAND_INSTANCE_SIGNATURE` and `SWAYSOCK` are read from the systemd user manager (`systemctl --user show-environment`), or else from the daemon's own environment. If your Hyprland or Sway startup does not hand its variables to the user manager, add for example `systemctl --user import-environment HYPRLAND_INSTANCE_SIGNATURE` to it; the daemon picks them up at its next check. The event log records the chosen method as `focus_watch`, and on GNOME a `focus_watch_problem` when the extension cannot run:
 
 ```bash
 linexusctl events list | grep focus_watch
@@ -271,7 +280,7 @@ Both lists hold targets that receive the current headline card: an MQTT broker (
 
 - **Status**: connection state, device path, profile and page on the strip, a brightness slider, and **Turn off** or **Turn on**. **Start daemon**, **Restart** and **Stop** run `systemctl --user` for `linexusd.service`; **Start with my session** enables or disables it.
 - **Behaviour**: page change animation (Slide, Fade, Instant), language on the strip, 24 or 12 hour clock, °C or °F, dimming after an idle time and the dimmed brightness, "First touch only wakes", turning off after an idle time, and "Off while the screen is locked". These are the `settings` fields in [configuration.md](configuration.md#settings).
-- **Setup checks**: the strip, the udev rule, the daemon, autostart, the input helper, the desktop tools (`xdg-open`, `wpctl`, `busctl`, `curl`, `dbus-monitor`) and OpenLinkHub. Each problem comes with a command you can copy.
+- **Setup checks**: the strip, the udev rule, the daemon, autostart, the input helper, the desktop tools (`xdg-open`, `wpctl` or `pactl`, `busctl`, `curl`, `dbus-monitor`), the GNOME focus extension on GNOME, and OpenLinkHub. Each problem comes with a command you can copy.
 - **Recent events**: the daemon's event log.
 
 The brightness slider here changes the strip immediately and is kept across daemon restarts, but it does not change the profile's brightness. Use the slider in the profile's **Look** panel for that.

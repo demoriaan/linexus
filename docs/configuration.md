@@ -227,7 +227,7 @@ Built-in tap: the buttons skip back, play or pause, and skip forward; tapping th
 | `show_value` | `true` | Show the percentage |
 | `step` | `5` | Accepted, but not used yet |
 
-Built-in touch: slide along the bar to set the volume; tap the speaker icon to mute or unmute. Uses `wpctl`.
+Built-in touch: slide along the bar to set the volume; tap the speaker icon to mute or unmute. Uses `wpctl`, or `pactl` when `wpctl` is missing.
 
 ### button
 
@@ -361,7 +361,7 @@ Sends an MPRIS command with `busctl`. `command` is `play_pause`, `next`, `previo
 
 ### volume
 
-Changes the default output with `wpctl`. `command` is `up`, `down`, `set` or `toggle_mute`. `step` (default 5) applies to `up` and `down`; `percent` (0 to 100) is required for `set`. Volume never goes above 100 %.
+Changes the default output with `wpctl`, or `pactl` when `wpctl` is missing. `command` is `up`, `down`, `set` or `toggle_mute`. `step` (default 5) applies to `up` and `down`; `percent` (0 to 100) is required for `set`. Volume never goes above 100 %.
 
 ```json
 { "type": "volume", "command": "up", "step": 5 }
@@ -373,7 +373,7 @@ Changes the default output with `wpctl`. `command` is `up`, `down`, `set` or `to
 
 ### microphone_mute
 
-Toggles the mute state of the default microphone with `wpctl`.
+Toggles the mute state of the default microphone with `wpctl`, or `pactl` when `wpctl` is missing.
 
 ```json
 { "type": "microphone_mute" }

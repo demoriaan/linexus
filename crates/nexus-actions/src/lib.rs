@@ -1,5 +1,6 @@
 use std::env;
 use std::fmt;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -25,6 +26,8 @@ pub struct BackendStatus {
     pub gtk_launch: Option<PathBuf>,
     pub kioclient: Option<PathBuf>,
     pub wpctl: Option<PathBuf>,
+    /// PulseAudio's control tool; used for volume when `wpctl` is missing.
+    pub pactl: Option<PathBuf>,
     pub busctl: Option<PathBuf>,
     pub wtype: Option<PathBuf>,
     pub ydotool: Option<PathBuf>,
@@ -39,6 +42,9 @@ pub struct BackendStatus {
     /// Default browser, when it supports opening URLs in a new window;
     /// filled by [`BackendStatus::with_default_browser`].
     pub default_browser: Option<BrowserLauncher>,
+    /// Level of the default output in percent as `pactl` reports it; filled
+    /// by [`BackendStatus::with_pactl_volume`] for raising the volume.
+    pub pactl_volume: Option<u8>,
 }
 
 impl BackendStatus {
@@ -53,6 +59,7 @@ impl BackendStatus {
             gtk_launch: which("gtk-launch"),
             kioclient: which("kioclient").or_else(|| which("kioclient5")),
             wpctl: which("wpctl"),
+            pactl: which("pactl"),
             busctl: which("busctl"),
             wtype: which("wtype"),
             ydotool: which("ydotool"),
@@ -63,6 +70,7 @@ impl BackendStatus {
             curl: which("curl"),
             session_env: Vec::new(),
             default_browser: None,
+            pactl_volume: None,
         }
     }
 
@@ -78,6 +86,15 @@ impl BackendStatus {
         self
     }
 
+    /// Adds the current output level when the volume goes through `pactl`,
+    /// which has no ceiling of its own; only raising the volume needs it.
+    pub fn with_pactl_volume(mut self) -> Self {
+        if self.wpctl.is_none() {
+            self.pactl_volume = self.pactl.as_deref().and_then(read_pactl_volume);
+        }
+        self
+    }
+
     pub fn supports_open_url(&self) -> bool {
         self.xdg_open.is_some() || self.kioclient.is_some()
     }
@@ -87,7 +104,7 @@ impl BackendStatus {
     }
 
     pub fn supports_volume(&self) -> bool {
-        self.wpctl.is_some()
+        self.wpctl.is_some() || self.pactl.is_some()
     }
 
     pub fn supports_mpris(&self) -> bool {
@@ -301,6 +318,9 @@ fn execute_action_inner(
     }
     if matches!(action, Action::OpenUrl(_)) {
         status = status.with_default_browser();
+    }
+    if matches!(action, Action::Volume(VolumeCommand::Up(_))) {
+        status = status.with_pactl_volume();
     }
     let planned = plan_action(action, &status)?;
     if dry_run {
@@ -519,16 +539,16 @@ fn plan_open_path(path: &str, status: &BackendStatus) -> Result<PlannedCommand> 
 }
 
 fn plan_microphone_mute(status: &BackendStatus) -> Result<PlannedCommand> {
-    let Some(program) = &status.wpctl else {
-        return Err(ActionError::MissingBackend("wpctl"));
+    let (program, args) = if let Some(program) = &status.wpctl {
+        (program, ["set-mute", "@DEFAULT_AUDIO_SOURCE@", "toggle"])
+    } else if let Some(program) = &status.pactl {
+        (program, ["set-source-mute", "@DEFAULT_SOURCE@", "toggle"])
+    } else {
+        return Err(ActionError::MissingBackend("wpctl or pactl"));
     };
     Ok(PlannedCommand {
         program: program.clone(),
-        args: vec![
-            "set-mute".into(),
-            "@DEFAULT_AUDIO_SOURCE@".into(),
-            "toggle".into(),
-        ],
+        args: args.map(String::from).to_vec(),
         wait: true,
         timeout: Some(Duration::from_secs(3)),
     })
@@ -644,7 +664,7 @@ fn plan_media(
 
 fn plan_volume(command: VolumeCommand, status: &BackendStatus) -> Result<PlannedCommand> {
     let Some(program) = &status.wpctl else {
-        return Err(ActionError::MissingBackend("wpctl"));
+        return plan_pactl_volume(command, status);
     };
     // wpctl has no ceiling of its own: without `--limit` a held volume-up
     // key keeps amplifying past 100 %.
@@ -680,6 +700,88 @@ fn plan_volume(command: VolumeCommand, status: &BackendStatus) -> Result<Planned
         wait: true,
         timeout: Some(Duration::from_secs(3)),
     })
+}
+
+/// The volume through PulseAudio's `pactl`, also present on PipeWire systems
+/// with pipewire-pulse.
+fn plan_pactl_volume(command: VolumeCommand, status: &BackendStatus) -> Result<PlannedCommand> {
+    let Some(program) = &status.pactl else {
+        return Err(ActionError::MissingBackend("wpctl or pactl"));
+    };
+    let sink = || "@DEFAULT_SINK@".to_string();
+    let args = match command {
+        // pactl has no ceiling either, so near 100 % the step becomes an
+        // absolute 100 % when the current level is known. Below that it
+        // stays relative, which keeps the balance between channels.
+        VolumeCommand::Up(step) => {
+            let step = step.clamp(1, 100);
+            let value = match status.pactl_volume {
+                Some(current) if u16::from(current) + u16::from(step) > 100 => "100%".into(),
+                _ => format!("+{step}%"),
+            };
+            vec!["set-sink-volume".into(), sink(), value]
+        }
+        // Without "--" pactl would read "-5%" as an option.
+        VolumeCommand::Down(step) => vec![
+            "set-sink-volume".into(),
+            sink(),
+            "--".into(),
+            format!("-{}%", step.clamp(1, 100)),
+        ],
+        VolumeCommand::Set(percent) => {
+            vec![
+                "set-sink-volume".into(),
+                sink(),
+                format!("{}%", percent.min(100)),
+            ]
+        }
+        VolumeCommand::ToggleMute => vec!["set-sink-mute".into(), sink(), "toggle".into()],
+    };
+    Ok(PlannedCommand {
+        program: program.clone(),
+        args,
+        wait: true,
+        timeout: Some(Duration::from_secs(3)),
+    })
+}
+
+/// Level of the default output from `pactl get-sink-volume`, waiting at most
+/// a second.
+fn read_pactl_volume(program: &Path) -> Option<u8> {
+    let mut child = Command::new(program)
+        .args(["get-sink-volume", "@DEFAULT_SINK@"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait().ok()? {
+            Some(status) if status.success() => break,
+            Some(_) => return None,
+            None if started.elapsed() >= Duration::from_secs(1) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            None => thread::sleep(Duration::from_millis(10)),
+        }
+    }
+    let mut text = String::new();
+    child.stdout.take()?.read_to_string(&mut text).ok()?;
+    parse_pactl_volume(&text)
+}
+
+/// `Volume: front-left: 26214 /  40% / -23.88 dB,   front-right: …` → 40;
+/// the loudest channel counts. Only the percent figures are read, which
+/// pactl prints the same in every language.
+pub fn parse_pactl_volume(input: &str) -> Option<u8> {
+    input
+        .split_whitespace()
+        .filter_map(|part| part.strip_suffix('%')?.parse::<u32>().ok())
+        .max()
+        .map(|percent| percent.min(u32::from(u8::MAX)) as u8)
 }
 
 fn plan_shell(program: &str, args: &[String]) -> Result<PlannedCommand> {
@@ -890,6 +992,7 @@ mod tests {
             gtk_launch: Some(PathBuf::from("/usr/bin/gtk-launch")),
             kioclient: Some(PathBuf::from("/usr/bin/kioclient")),
             wpctl: Some(PathBuf::from("/usr/bin/wpctl")),
+            pactl: Some(PathBuf::from("/usr/bin/pactl")),
             busctl: Some(PathBuf::from("/usr/bin/busctl")),
             wtype: Some(PathBuf::from("/usr/bin/wtype")),
             ydotool: None,
@@ -900,6 +1003,7 @@ mod tests {
             curl: Some(PathBuf::from("/usr/bin/curl")),
             session_env: Vec::new(),
             default_browser: None,
+            pactl_volume: None,
         }
     }
 
@@ -1033,6 +1137,72 @@ mod tests {
         );
         let planned = plan_action(&Action::Volume(VolumeCommand::Down(5)), &status()).unwrap();
         assert_eq!(planned.args[2], "5%-");
+    }
+
+    #[test]
+    fn volume_falls_back_to_pactl_without_wpctl() {
+        let mut status = status();
+        status.wpctl = None;
+        let plan = |command| plan_action(&Action::Volume(command), &status).unwrap();
+        assert_eq!(
+            plan(VolumeCommand::Up(5)).program,
+            PathBuf::from("/usr/bin/pactl")
+        );
+        assert_eq!(
+            plan(VolumeCommand::Up(5)).args,
+            vec!["set-sink-volume", "@DEFAULT_SINK@", "+5%"]
+        );
+        assert_eq!(
+            plan(VolumeCommand::Down(5)).args,
+            vec!["set-sink-volume", "@DEFAULT_SINK@", "--", "-5%"]
+        );
+        assert_eq!(
+            plan(VolumeCommand::Set(150)).args,
+            vec!["set-sink-volume", "@DEFAULT_SINK@", "100%"]
+        );
+        assert_eq!(
+            plan(VolumeCommand::ToggleMute).args,
+            vec!["set-sink-mute", "@DEFAULT_SINK@", "toggle"]
+        );
+        let mic = plan_action(&Action::MicrophoneMute, &status).unwrap();
+        assert_eq!(
+            mic.args,
+            vec!["set-source-mute", "@DEFAULT_SOURCE@", "toggle"]
+        );
+    }
+
+    #[test]
+    fn pactl_volume_up_stops_at_100_percent() {
+        let mut status = status();
+        status.wpctl = None;
+        for (current, expected) in [(40, "+5%"), (95, "+5%"), (98, "100%"), (130, "100%")] {
+            status.pactl_volume = Some(current);
+            let planned = plan_action(&Action::Volume(VolumeCommand::Up(5)), &status).unwrap();
+            assert_eq!(planned.args[2], expected, "from {current} %");
+        }
+    }
+
+    #[test]
+    fn volume_needs_wpctl_or_pactl() {
+        let mut status = status();
+        status.wpctl = None;
+        status.pactl = None;
+        assert!(plan_action(&Action::Volume(VolumeCommand::Up(5)), &status).is_err());
+        assert!(plan_action(&Action::MicrophoneMute, &status).is_err());
+    }
+
+    #[test]
+    fn parses_pactl_volume() {
+        let stereo = "Volume: front-left: 26214 /  40% / -23.88 dB,   front-right: 28180 /  43% / -21.99 dB\n        balance 0.07\n";
+        assert_eq!(parse_pactl_volume(stereo), Some(43));
+        assert_eq!(
+            parse_pactl_volume("Volume: mono: 98304 / 150% / 10.57 dB\n"),
+            Some(150)
+        );
+        assert_eq!(
+            parse_pactl_volume("Connection failure: Connection refused\n"),
+            None
+        );
     }
 
     #[test]

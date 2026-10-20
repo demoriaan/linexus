@@ -4,9 +4,10 @@
 #
 #   curl -fsSL https://github.com/demoriaan/linexus/releases/latest/download/install.sh | bash
 #
-# Arch Linux and its derivatives get the linexus package through pacman.
-# Other distributions get the prebuilt binaries in ~/.local/bin. Run it as
-# your desktop user; it calls sudo itself for the parts that need root.
+# Arch Linux, Debian, Ubuntu, Fedora, openSUSE and their derivatives get the
+# linexus package through their package manager; other distributions get the
+# prebuilt binaries in ~/.local/bin. Run it as your desktop user; it calls
+# sudo itself for the parts that need root.
 # Pass options after "bash -s --", for example: ... | bash -s -- --help
 #
 # Exit codes: 0 installed, 1 error, 2 bad option,
@@ -25,7 +26,8 @@ Installs Linexus for the Corsair iCUE Nexus from a GitHub release.
 
 Options:
   --version X.Y.Z   Install this release instead of the latest one
-  --method METHOD   auto (default), arch (pacman package) or tarball (~/.local)
+  --method METHOD   auto (default), arch (pacman), deb (apt), rpm (dnf or
+                    zypper) or tarball (prebuilt binaries in ~/.local)
   --from DIR        Use release files already downloaded to DIR
   --no-root         Never run sudo; print the commands that need root instead
   --no-start        Enable the daemon, but do not start it now
@@ -105,18 +107,95 @@ asset_matching() {
 }
 
 fetch_verified() {
-  local name="$1"
+  local name="$1" sum file entry=""
   fetch "$name"
-  (cd "$work" && awk -v n="$name" '$2 == n' SHA256SUMS | grep -q . \
-    && awk -v n="$name" '$2 == n' SHA256SUMS | sha256sum --check --quiet --strict -) \
+  while read -r sum file; do
+    [[ $file == "$name" ]] && entry="$sum  $file"
+  done < "$work/SHA256SUMS"
+  [[ -n $entry ]] || die "$name is not listed in SHA256SUMS"
+  (cd "$work" && printf '%s\n' "$entry" | sha256sum --check --quiet --strict -) \
     || die "checksum mismatch for $name; delete $work and try again"
 }
 
 no_prebuilt() {
   if [[ $arch == x86_64 ]]; then
-    die "release $version has no $1 for $arch; try --method arch or --method tarball"
+    die "release $version has no $1 for $arch; try --method tarball"
   fi
   die "there are no prebuilt files for $arch; build from source: https://github.com/$repo/blob/master/docs/install.md"
+}
+
+# The prebuilt binaries need glibc 2.34 or newer. When the version cannot be
+# read, the package dependencies or the test run of a binary catch it later.
+check_glibc() {
+  local found
+  found="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
+  found="${found#glibc }"
+  [[ $found =~ ^[0-9]+\.[0-9]+ ]] || return 0
+  if [[ "$(printf '%s\n2.34\n' "$found" | sort -V | head -n1)" != 2.34 ]]; then
+    die "the prebuilt files need glibc 2.34 or newer, this system has $found; build from source: https://github.com/$repo/blob/master/docs/install.md"
+  fi
+}
+
+# Arch Linux or a derivative (Manjaro, EndeavourOS, Garuda, SteamOS, ...).
+# Debian and Ubuntu ship a game and a package manager called pacman, so the
+# command alone is not enough.
+arch_based() {
+  have pacman || return 1
+  (
+    # shellcheck disable=SC1091
+    . /etc/os-release 2>/dev/null || exit 1
+    [[ " ${ID:-} ${ID_LIKE:-} " == *" arch "* ]]
+  )
+}
+
+# The package format of this system's package manager, or nothing.
+native_format() {
+  if arch_based; then
+    echo arch
+  elif have apt-get && have dpkg; then
+    echo deb
+  elif have rpm && { have dnf || have zypper; }; then
+    echo rpm
+  fi
+}
+
+# Image-based systems keep /usr read-only: Fedora Silverblue, Kinoite and
+# Bazzite (rpm-ostree), openSUSE Aeon and MicroOS (transactional-update),
+# SteamOS. Their package manager cannot take a package the usual way; the
+# ~/.local install works there.
+immutable_system() {
+  [[ -e /run/ostree-booted ]] && return 0
+  have transactional-update && return 0
+  have findmnt && findmnt -no OPTIONS -T /usr 2>/dev/null | tr ',' '\n' | grep -qx ro
+}
+
+# The installed version of the linexus package in format $1, or nothing.
+installed_version() {
+  case "$1" in
+    arch) pacman -Q linexus 2>/dev/null | cut -d' ' -f2 || true ;;
+    deb) dpkg-query -W -f='${Status}|${Version}' linexus 2>/dev/null | sed -n 's/^[a-z]* ok installed|//p' || true ;;
+    # rpm -q prints "package linexus is not installed" on stdout.
+    rpm) rpm -q --qf '%{VERSION}-%{RELEASE}\n' linexus 2>/dev/null | grep -v ' ' || true ;;
+  esac
+}
+
+# Sets pkg_cmd to the package manager command for $1 (install or remove) in
+# format $2. The package file follows for install.
+set_pkg_cmd() {
+  case "$2" in
+    arch)
+      if [[ $1 == install ]]; then pkg_cmd=(pacman -U --noconfirm --needed); else pkg_cmd=(pacman -R --noconfirm linexus); fi ;;
+    deb)
+      if [[ $1 == install ]]; then pkg_cmd=(apt-get install -y --allow-downgrades); else pkg_cmd=(apt-get remove -y linexus); fi ;;
+    rpm)
+      if have dnf; then
+        if [[ $1 == install ]]; then pkg_cmd=(dnf install -y); else pkg_cmd=(dnf remove -y linexus); fi
+      elif [[ $1 == install ]]; then
+        pkg_cmd=(zypper --non-interactive install --allow-unsigned-rpm)
+      else
+        pkg_cmd=(zypper --non-interactive remove linexus)
+      fi ;;
+  esac
 }
 
 # True when the root part of the tarball install (udev rule, root input
@@ -153,6 +232,20 @@ setup_user_services() {
   fi
 }
 
+# On GNOME, app-aware profiles need a small shell extension; linexusctl
+# installs it for this user. It also decides whether this is a GNOME Shell
+# session, the same way the daemon does.
+setup_gnome_focus() {
+  local ctl="$1" status
+  # Read all of it first: grep -q would close the pipe early and, with
+  # pipefail, turn linexusctl's broken-pipe exit into a "no".
+  status="$("$ctl" gnome-extension status 2>/dev/null || true)"
+  grep -qx 'GNOME Shell session: yes' <<<"$status" || return 0
+  step "GNOME focus extension"
+  "$ctl" gnome-extension install \
+    || warn "could not set up the GNOME focus extension; profiles will not follow the focused app. Retry with: linexusctl gnome-extension install"
+}
+
 setup_input_helper() {
   local root_unit="$1"
   [[ $input_helper -eq 1 ]] || return 0
@@ -167,28 +260,52 @@ setup_input_helper() {
   fi
 }
 
-install_arch() {
-  local pkg installed rc=0
-  pkg="$(asset_matching "linexus-${version//./\\.}-[0-9]+-$arch\\.pkg\\.tar\\.zst")"
-  [[ -n $pkg ]] || no_prebuilt "an Arch package"
+install_package() {
+  local format="$1" pattern pkg installed rc=0 v="${version//./\\.}"
+  case "$format" in
+    arch) have pacman || die "--method arch needs pacman"
+          pattern="linexus-$v-[0-9]+-$arch\\.pkg\\.tar\\.zst" ;;
+    deb)  have apt-get || die "--method deb needs apt-get"
+          pattern="linexus_$v-[0-9]+_$deb_arch\\.deb" ;;
+    rpm)  have dnf || have zypper || die "--method rpm needs dnf or zypper"
+          pattern="linexus-$v-[0-9]+\\.$arch\\.rpm" ;;
+  esac
+  pkg="$(asset_matching "$pattern")"
+  if [[ -z $pkg && $auto_method -eq 1 ]]; then
+    say "Release $version has no $format package; installing the prebuilt binaries to ~/.local instead."
+    install_tarball
+    return
+  fi
+  [[ -n $pkg ]] || no_prebuilt "$format package"
+  [[ $format == arch ]] || check_glibc
   fetch_verified "$pkg"
 
   if old_source_install; then
-    warn "found an install from source in ~/.local/bin. Its user service in ~/.config/systemd/user"
+    warn "found an install in ~/.local/bin. Its user service in ~/.config/systemd/user"
     warn "takes precedence over the package. Remove it with: packaging/scripts/install-dev.sh --uninstall"
   fi
 
-  installed="$(pacman -Q linexus 2>/dev/null | cut -d' ' -f2 || true)"
+  installed="$(installed_version "$format")"
   if [[ $installed == "$version"-* ]]; then
     say "linexus $installed is already installed."
   else
     step "Installing the package (needs root)"
-    as_root pacman -U --noconfirm --needed "$work/$pkg" || rc=$?
+    set_pkg_cmd install "$format"
+    as_root "${pkg_cmd[@]}" "$work/$pkg" || rc=$?
     if [[ $rc -eq 10 ]]; then
       pending_after="Then run this installer again to set up the daemon for your user."
       return
     fi
-    [[ $rc -eq 0 ]] || die "pacman could not install $pkg"
+    # zypper also ends with informational codes (106, 107) after a good
+    # install, so the result counts, not the exit code.
+    installed="$(installed_version "$format")"
+    if [[ $installed != "$version"-* ]]; then
+      if [[ $rc -ne 0 ]]; then
+        die "${pkg_cmd[0]} could not install $pkg (exit code $rc); see its output above, or try --method tarball"
+      fi
+      die "${pkg_cmd[0]} kept linexus ${installed:-uninstalled} instead of $version; run with --uninstall first, then install again"
+    fi
+    [[ $rc -eq 0 ]] || warn "${pkg_cmd[0]} ended with exit code $rc, but linexus $installed is installed"
   fi
 
   /usr/bin/linexusctl --version >/dev/null 2>&1 \
@@ -196,6 +313,7 @@ install_arch() {
 
   step "Setting up the daemon for $(id -un)"
   setup_user_services /usr/bin/linexusctl
+  setup_gnome_focus /usr/bin/linexusctl
   setup_input_helper "linexus-inputd@$(id -u).service"
   ctl=/usr/bin/linexusctl
 }
@@ -204,12 +322,13 @@ install_tarball() {
   local tarball dir script rc=0
   tarball="linexus-$version-$arch-linux.tar.gz"
   [[ -n "$(asset_matching "${tarball//./\\.}")" ]] || no_prebuilt "prebuilt binaries"
+  check_glibc
   fetch_verified "$tarball"
   tar -xzf "$work/$tarball" -C "$work"
   dir="$work/${tarball%.tar.gz}"
   script="$dir/packaging/scripts/install-dev.sh"
   "$dir/bin/linexusctl" --version >/dev/null 2>&1 \
-    || die "the prebuilt binaries do not run on this system (they need glibc 2.35 or newer); build from source: https://github.com/$repo/blob/master/docs/install.md"
+    || die "the prebuilt binaries do not run on this system; build from source: https://github.com/$repo/blob/master/docs/install.md"
 
   local args=(--bin-dir "$dir/bin") root_done=0
   [[ $start -eq 1 ]] && args+=(--start)
@@ -231,6 +350,7 @@ install_tarball() {
     pending_root+=("sudo bash $(printf '%q' "$script") --bin-dir $(printf '%q' "$dir/bin") --no-build --no-config --no-enable")
   fi
 
+  setup_gnome_focus "$HOME/.local/bin/linexusctl"
   setup_input_helper linexus-inputd.service
   ctl="$HOME/.local/bin/linexusctl"
   case ":$PATH:" in
@@ -240,15 +360,27 @@ install_tarball() {
 }
 
 uninstall() {
-  local rc=0 script
-  if have pacman && pacman -Q linexus >/dev/null 2>&1; then
+  local rc=0 script format helper tool
+  helper="linexus-inputd@$(id -u).service"
+  format="$(native_format)"
+  for tool in /usr/bin/linexusctl "$HOME/.local/bin/linexusctl"; do
+    if [[ -x $tool && -d "${XDG_DATA_HOME:-$HOME/.local/share}/gnome-shell/extensions/linexus-focus@demoriaan.github.io" ]]; then
+      step "Removing the GNOME focus extension"
+      "$tool" gnome-extension remove || warn "could not remove the GNOME focus extension"
+      break
+    fi
+  done
+  if [[ -n $format && -n "$(installed_version "$format")" ]]; then
     step "Removing the linexus package"
     if user_systemd; then
       systemctl --user disable --now linexusd.service linexus-inputd.service 2>/dev/null || true
     fi
-    as_root systemctl disable --now "linexus-inputd@$(id -u).service" || [[ $? -eq 10 ]] || true
-    as_root pacman -R --noconfirm linexus || rc=$?
-    [[ $rc -eq 0 || $rc -eq 10 ]] || die "pacman could not remove linexus"
+    if systemctl is-enabled --quiet "$helper" 2>/dev/null; then
+      as_root systemctl disable --now "$helper" || [[ $? -eq 10 ]] || true
+    fi
+    set_pkg_cmd remove "$format"
+    as_root "${pkg_cmd[@]}" || rc=$?
+    [[ $rc -eq 0 || $rc -eq 10 ]] || die "${pkg_cmd[0]} could not remove linexus"
   fi
 
   if old_source_install; then
@@ -333,7 +465,7 @@ main() {
     shift
   done
   case "$method" in
-    auto|arch|tarball) ;;
+    auto|arch|deb|rpm|tarball) ;;
     *) printf 'unknown method: %s\n' "$method" >&2; usage >&2; exit 2 ;;
   esac
 
@@ -345,6 +477,11 @@ main() {
   done
 
   arch="$(uname -m)"
+  case "$arch" in
+    x86_64) deb_arch=amd64 ;;
+    aarch64) deb_arch=arm64 ;;
+    *) deb_arch="$arch" ;;
+  esac
   config_path="${XDG_CONFIG_HOME:-$HOME/.config}/linexus/config.json"
   cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/linexus/installer"
 
@@ -355,8 +492,20 @@ main() {
     exit 0
   fi
 
+  auto_method=0
   if [[ $method == auto ]]; then
-    if have pacman; then method=arch; else method=tarball; fi
+    auto_method=1
+    method="$(native_format)"
+    if [[ -z $method ]]; then
+      method=tarball
+    elif immutable_system; then
+      say "This system keeps /usr read-only; installing the prebuilt binaries to ~/.local."
+      method=tarball
+    elif old_source_install && [[ -z "$(installed_version "$method")" ]]; then
+      say "Found an install in ~/.local; updating it in place."
+      say "To switch to the $method package instead: run with --uninstall, then without."
+      method=tarball
+    fi
   fi
 
   resolve_version
@@ -365,10 +514,10 @@ main() {
   step "Linexus $version ($method, $arch)"
   fetch SHA256SUMS
 
-  if [[ $method == arch ]]; then
-    install_arch
-  else
+  if [[ $method == tarball ]]; then
     install_tarball
+  else
+    install_package "$method"
   fi
 
   if [[ -n $ctl && -x $ctl ]]; then

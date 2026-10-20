@@ -12,14 +12,14 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 /// Desktop tools the actions and the daemon call, and what breaks without
-/// them.
-const TOOLS: [(&str, &str); 6] = [
-    ("xdg-open", "opening links and files"),
-    ("wpctl", "volume and microphone controls"),
-    ("busctl", "media controls"),
-    ("curl", "HTTP request actions"),
-    ("dbus-monitor", "desktop notifications on the strip"),
-    ("loginctl", "the lock-screen action"),
+/// them. Where several tools are listed, any one of them does.
+const TOOLS: [(&[&str], &str); 6] = [
+    (&["xdg-open"], "opening links and files"),
+    (&["wpctl", "pactl"], "volume and microphone controls"),
+    (&["busctl"], "media controls"),
+    (&["curl"], "HTTP request actions"),
+    (&["dbus-monitor"], "desktop notifications on the strip"),
+    (&["loginctl"], "the lock-screen action"),
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -84,6 +84,7 @@ pub(crate) fn run(verbose: bool) {
 
     println!("\nDesktop tools");
     check_tools(&mut report);
+    check_gnome_extension(&mut report);
 
     if verbose {
         print_details();
@@ -361,15 +362,61 @@ fn check_config(report: &mut Report) {
 }
 
 fn check_tools(report: &mut Report) {
-    let (present, missing): (Vec<_>, Vec<_>) =
-        TOOLS.iter().partition(|(bin, _)| which(bin).is_some());
+    let mut present = Vec::new();
+    let mut missing = Vec::new();
+    for (bins, purpose) in TOOLS {
+        match bins.iter().find(|bin| which(bin).is_some()) {
+            Some(bin) => present.push(*bin),
+            None => missing.push((bins.join(" or "), purpose)),
+        }
+    }
     if !present.is_empty() {
-        let names: Vec<&str> = present.iter().map(|(bin, _)| *bin).collect();
-        report.check(Level::Ok, names.join(", "));
+        report.check(Level::Ok, present.join(", "));
     }
-    for (bin, purpose) in missing {
-        report.check(Level::Warn, format!("{bin} missing; needed for {purpose}"));
+    for (bins, purpose) in missing {
+        report.check(Level::Warn, format!("{bins} missing; needed for {purpose}"));
     }
+}
+
+/// On GNOME, app-aware profiles need the focus extension.
+fn check_gnome_extension(report: &mut Report) {
+    if !crate::gnome_cmd::gnome_session() {
+        return;
+    }
+    let status = nexus_sensors::GnomeExtensionStatus::read();
+    if status.complete() && status.running {
+        report.check(Level::Ok, "GNOME focus extension runs");
+        return;
+    }
+    if status.user_extensions_off {
+        report.check(
+            Level::Warn,
+            "GNOME extensions are turned off; profiles cannot follow the focused app",
+        );
+        report.hint("Turn them on in the Extensions app, or: gsettings set org.gnome.shell disable-user-extensions false");
+        return;
+    }
+    if status.complete() {
+        report.check(
+            Level::Warn,
+            "GNOME focus extension is enabled but GNOME Shell has not loaded it yet",
+        );
+        report.hint("Log out and back in once; profiles follow the focused app after that.");
+        return;
+    }
+    let problem = if status.dir.is_none() {
+        "GNOME focus extension not installed"
+    } else if !status.supports_shell {
+        "GNOME focus extension does not list this GNOME Shell version"
+    } else {
+        "GNOME focus extension is turned off"
+    };
+    report.check(
+        Level::Warn,
+        format!("{problem}; profiles cannot follow the focused app"),
+    );
+    report.fixable = true;
+    report.hint("`linexusctl doctor --fix` or `linexusctl gnome-extension install` sets it up.");
 }
 
 fn print_details() {
