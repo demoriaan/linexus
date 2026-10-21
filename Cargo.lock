@@ -759,7 +759,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-actions"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "nexus-input",
  "thiserror 1.0.69",
@@ -767,7 +767,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-config"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "nexus-actions",
  "serde",
@@ -777,7 +777,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-core"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "hidapi",
  "thiserror 1.0.69",
@@ -785,7 +785,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-daemon"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -807,7 +807,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-events"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -816,7 +816,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-input"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -825,7 +825,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-inputd"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -836,7 +836,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-ipc"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -845,7 +845,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-pack"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "nexus-config",
@@ -856,7 +856,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-render"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "base64",
  "fontdue",
@@ -870,7 +870,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-sensors"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "base64",
  "libc",
@@ -883,7 +883,7 @@ dependencies = [
 
 [[package]]
 name = "nexus-studio"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -903,7 +903,7 @@ dependencies = [
 
 [[package]]
 name = "nexusctl"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "base64",
