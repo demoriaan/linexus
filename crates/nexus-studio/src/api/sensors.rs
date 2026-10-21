@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 /// Fields Studio edits through dedicated endpoints. A full sensors.json save
 /// from a view that does not know them keeps the stored values instead of
 /// silently dropping them.
-const PRESERVED_FIELDS: [&str; 1] = ["home_assistant_server"];
+const PRESERVED_FIELDS: [&str; 2] = ["home_assistant_server", "obs_server"];
 
 pub fn route(request: &Request) -> Option<Response> {
     let path = request.path.as_str();

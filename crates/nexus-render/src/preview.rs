@@ -129,6 +129,15 @@ pub fn sample_live(locale: Locale) -> LiveData {
             },
         );
     }
+    // Matches the Streaming template: recording, mic open, default scene.
+    live.obs = Some(ObsInfo {
+        scene: "Scene".into(),
+        recording: true,
+        record_ms: 754_000,
+        replay_buffer: true,
+        muted: [("Mic/Aux".to_string(), false)].into(),
+        ..ObsInfo::default()
+    });
     live.timers.insert(
         "timer".into(),
         TimerInfo {

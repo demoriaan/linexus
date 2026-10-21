@@ -25,3 +25,6 @@ nexus-ipc = { path = "../nexus-ipc" }
 libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+tungstenite.workspace = true

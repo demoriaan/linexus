@@ -14,7 +14,7 @@ The window has a top bar, a navigation rail on the left and the current section.
 |---|---|
 | **Pages** | Design pages: the strip on stage, page thumbnails, widget library, inspector |
 | **News** | Feeds for the Headlines widget, and how headlines move |
-| **Connections** | Home Assistant, the default weather place, desktop notifications, webhooks, MQTT, IFTTT |
+| **Connections** | Home Assistant, OBS Studio, the default weather place, desktop notifications, webhooks, MQTT, IFTTT |
 | **Device** | Strip and daemon status, behaviour settings, setup checks, event log |
 | **Settings** | Studio language and appearance, backups, about |
 
@@ -62,6 +62,7 @@ Below the stage, thumbnails show all pages of the profile. The number is the pag
 | News | Two headlines from your feeds; tap to read |
 | Focus | Pomodoro timer, weather and a large clock |
 | Home | Weather and Home Assistant switches |
+| Streaming | OBS buttons: record, pause, stream, mic, scene and replay clip. The mic and scene buttons use the names a fresh English OBS gives them (`Mic/Aux`, `Scene`); pick yours in the inspector |
 | Empty page | Nothing yet |
 
 ### Widget library
@@ -136,7 +137,7 @@ The action picker groups the actions:
 | Sound and media | Media control, Volume, Mute microphone |
 | Keyboard | Press keys, Type text (need the [input helper](input-helper.md)) |
 | The strip | Next page, Previous page, Go to page, Go back, Switch profile, Next profile, Previous profile, Brightness, Turn the strip off |
-| System and services | Lock the screen, Home Assistant service, Web request, Run a program, Several actions |
+| System and services | Lock the screen, Home Assistant service, OBS Studio, Web request, Run a program, Several actions |
 
 - **Launch an app** picks from your installed applications, or "Web browser", "File manager", "Terminal" and "Mail", which follow your desktop's default applications.
 - **Press keys** records a shortcut: click the field, then press the keys.
@@ -237,6 +238,10 @@ When `sensors.json` exists but cannot be read, Studio shows the error and does n
 ### Home Assistant
 
 Enter the address of your Home Assistant (for example `http://homeassistant.local:8123`) and a long-lived access token, which you create in Home Assistant under your profile, Security. **Test connection** reports how many entities it found; **Save** stores both in `sensors.json`. Home Assistant widgets and the "Home Assistant service" action use this connection, and the widget's entity field then offers a list to pick from.
+
+### OBS Studio
+
+In OBS, open **Tools → WebSocket Server Settings**, turn the server on and note the password (**Show Connect Info**). In Studio, enter the computer OBS runs on (`localhost` for this one), the port (4455 unless changed) and the password. **Test connection** reports the OBS version and how many scenes it found; **Save** stores the connection in `sensors.json`. The "OBS Studio" action then offers OBS's scenes and audio sources to pick from, and the Streaming page template has a row of OBS buttons to start from.
 
 ### Weather
 

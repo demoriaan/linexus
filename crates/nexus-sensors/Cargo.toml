@@ -10,3 +10,7 @@ libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rumqttc.workspace = true
+tungstenite.workspace = true
+base64 = "0.22"
+# Already built for rumqttc's TLS; obs-websocket authentication needs SHA-256.
+ring = "0.17"

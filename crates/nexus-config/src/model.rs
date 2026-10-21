@@ -688,6 +688,13 @@ pub enum ActionSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         entity_id: Option<String>,
     },
+    /// Controls OBS Studio through obs-websocket.
+    Obs {
+        command: ObsCommand,
+        /// Scene name for `set_scene`, audio source name for `toggle_mute`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<String>,
+    },
     #[serde(alias = "screen_next")]
     NextPage,
     #[serde(alias = "screen_previous")]
@@ -744,6 +751,34 @@ pub enum HttpMethod {
     #[default]
     Post,
     Put,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ObsCommand {
+    ToggleRecord,
+    StartRecord,
+    StopRecord,
+    /// Pauses a running recording, or resumes a paused one.
+    PauseRecord,
+    ToggleStream,
+    StartStream,
+    StopStream,
+    /// Switches the program to the scene named by `target`.
+    SetScene,
+    /// Mutes or unmutes the audio source named by `target`.
+    ToggleMute,
+    ToggleReplayBuffer,
+    /// Saves the replay buffer as a clip.
+    SaveReplay,
+    ToggleVirtualCam,
+}
+
+impl ObsCommand {
+    /// Needs a scene or source name in `target`.
+    pub fn needs_target(self) -> bool {
+        matches!(self, Self::SetScene | Self::ToggleMute)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

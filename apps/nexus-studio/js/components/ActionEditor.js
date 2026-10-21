@@ -1,17 +1,26 @@
 // Editor for one gesture's action (tap, double tap or hold).
-import { html, useState } from "../lib/html.js";
+import { html, useEffect, useState } from "../lib/html.js";
 import { t } from "../lib/i18n.js";
 import { Icon } from "../lib/icons.js";
 import { profile, page, config } from "../lib/store.js";
-import { Field, TextInput, NumberInput, Select, AppField, EntityField, ArgsField } from "./Fields.js";
+import { Field, TextInput, NumberInput, Select, AppField, EntityField, ArgsField, ObsField, defaultObsTarget, loadObsSources } from "./Fields.js";
 
 export const ACTION_GROUPS = [
   ["open", ["launch_app", "open_url", "open_path"]],
   ["media", ["media", "volume", "microphone_mute"]],
   ["input", ["keyboard_shortcut", "text_input"]],
   ["strip", ["next_page", "previous_page", "go_to_page", "go_back", "switch_profile", "next_profile", "previous_profile", "brightness", "display_off"]],
-  ["system", ["lock_screen", "home_assistant", "http_request", "shell_command", "sequence"]],
+  ["system", ["lock_screen", "home_assistant", "obs", "http_request", "shell_command", "sequence"]],
 ];
+
+const OBS_COMMANDS = [
+  "toggle_record", "start_record", "stop_record", "pause_record",
+  "toggle_stream", "start_stream", "stop_stream",
+  "set_scene", "toggle_mute",
+  "toggle_replay_buffer", "save_replay", "toggle_virtual_cam",
+];
+/** Commands that name a scene or an audio source, and which list they pick from. */
+const OBS_TARGETS = { set_scene: "scenes", toggle_mute: "audio_inputs" };
 
 const DEFAULTS = {
   open_url: { url: "https://" },
@@ -25,6 +34,7 @@ const DEFAULTS = {
   shell_command: { program: "notify-send", args: ["Nexus", "Button pressed"] },
   http_request: { method: "POST", url: "https://" },
   home_assistant: { service: "light.toggle", entity_id: "" },
+  obs: { command: "toggle_record" },
   brightness: { command: "cycle" },
   sequence: { steps: [], delay_ms: 0 },
 };
@@ -110,6 +120,8 @@ function ActionFields({ value, set, depth }) {
       return html`
         <${Field} label=${t("action.ha.service")} hint=${t("action.ha.service.hint")}><${TextInput} value=${value.service} onInput=${(service) => set({ service })} /><//>
         <${Field} label=${t("action.ha.entity")}><${EntityField} value=${value.entity_id} onChange=${(entity_id) => set({ entity_id: entity_id || undefined })} /><//>`;
+    case "obs":
+      return html`<${ObsFields} value=${value} set=${set} />`;
     case "go_to_page":
       return html`<${Field} label=${t("action.page")}>
         <${Select} value=${value.page_id} options=${["", ...pages.map((p) => p.id)]} labelOf=${(id) => (id ? pages.find((p) => p.id === id)?.name ?? id : t("action.page.pick"))} onChange=${(page_id) => set({ page_id })} />
@@ -130,6 +142,21 @@ function ActionFields({ value, set, depth }) {
     default:
       return html`<p class="hint">${t(`action.${value.type}.hint`)}</p>`;
   }
+}
+
+function ObsFields({ value, set }) {
+  // OBS's names load while the command is being chosen, so a scene or mute
+  // button starts with a name OBS knows.
+  useEffect(() => { loadObsSources().catch(() => null); }, []);
+  const kind = OBS_TARGETS[value.command];
+  const choose = (command) => set({ command, target: OBS_TARGETS[command] ? defaultObsTarget(OBS_TARGETS[command]) : undefined });
+  return html`
+    <${Field} label=${t("action.obs.command")}>
+      <${Select} value=${value.command} options=${OBS_COMMANDS} labelOf=${(o) => t(`obs.command.${o}`)} onChange=${choose} />
+    <//>
+    ${kind && html`<${Field} label=${t(kind === "scenes" ? "action.obs.scene" : "action.obs.source")}>
+      <${ObsField} kind=${kind} value=${value.target} onChange=${(target) => set({ target: target || undefined })} />
+    <//>`}`;
 }
 
 /** Steps per sequence the config allows. */

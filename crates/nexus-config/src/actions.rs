@@ -4,7 +4,7 @@ use nexus_actions::{Action, MediaCommand, VolumeCommand};
 impl ActionSpec {
     /// The desktop-side action for this spec, or `None` for actions the
     /// daemon handles itself (page and profile navigation, brightness,
-    /// Home Assistant calls, sequences).
+    /// Home Assistant calls, OBS, sequences).
     pub fn to_external_action(&self) -> Option<Action> {
         Some(match self {
             Self::OpenUrl { url } => Action::OpenUrl(url.clone()),
@@ -54,6 +54,7 @@ impl ActionSpec {
             },
             Self::LockScreen => Action::LockScreen,
             Self::HomeAssistant { .. }
+            | Self::Obs { .. }
             | Self::NextPage
             | Self::PreviousPage
             | Self::GoToPage { .. }

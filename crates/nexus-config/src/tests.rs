@@ -603,3 +603,43 @@ fn concurrent_saves_never_mix_their_files() {
     );
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn obs_actions_name_their_scene_or_source() {
+    let action: ActionSpec =
+        serde_json::from_str(r#"{"type":"obs","command":"set_scene","target":"Gameplay"}"#)
+            .unwrap();
+    assert_eq!(
+        action,
+        ActionSpec::Obs {
+            command: ObsCommand::SetScene,
+            target: Some("Gameplay".into()),
+        }
+    );
+    assert!(action.to_external_action().is_none());
+    let record: ActionSpec =
+        serde_json::from_str(r#"{"type":"obs","command":"toggle_record"}"#).unwrap();
+    assert_eq!(
+        serde_json::to_value(&record).unwrap(),
+        serde_json::json!({"type": "obs", "command": "toggle_record"})
+    );
+
+    let mut config = default_config();
+    config.profiles[0].pages = vec![template_page(PageTemplate::Streaming, "stream")];
+    validate(&config).unwrap();
+    for target in [None, Some("  ")] {
+        config.profiles[0].pages[0].widgets[3].tap = Some(ActionSpec::Obs {
+            command: ObsCommand::ToggleMute,
+            target: target.map(Into::into),
+        });
+        assert!(matches!(
+            validate(&config),
+            Err(ConfigError::ObsTargetMissing { .. })
+        ));
+    }
+    config.profiles[0].pages[0].widgets[3].tap = Some(ActionSpec::Obs {
+        command: ObsCommand::ToggleVirtualCam,
+        target: None,
+    });
+    validate(&config).unwrap();
+}

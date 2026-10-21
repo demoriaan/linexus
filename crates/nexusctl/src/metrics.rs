@@ -23,6 +23,7 @@ pub(crate) fn print_metrics(metrics: &nexus_sensors::SystemMetrics) {
         metrics
             .gpu_fan_rpm
             .map(|v| format!("{v} RPM"))
+            .or_else(|| metrics.gpu_fan_percent.map(|v| format!("{v:.0} %")))
             .unwrap_or_else(|| "—".into())
     );
     println!(

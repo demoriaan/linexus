@@ -1,5 +1,6 @@
 mod feeds;
 mod integrations;
+mod obs;
 mod providers;
 mod refresh;
 pub use providers::battery::{read_batteries, BatteryReading};
@@ -7,6 +8,10 @@ pub use providers::clock::{local_clock, LocalClock};
 
 pub use feeds::{cached_feed_titles, inspect_feed_url, FeedInspection};
 
+pub use obs::{
+    input_names as obs_input_names, obs_overview, ObsConnection, ObsError, ObsEvent, ObsOverview,
+    ObsServer, DEFAULT_PORT as OBS_DEFAULT_PORT, MAX_INPUTS as OBS_MAX_INPUTS,
+};
 pub use providers::apps::{
     list_applications, list_desktop_entries, resolve_icon, running_programs, running_targets,
     AppEntry,
@@ -27,6 +32,7 @@ pub use providers::metrics::{metric_catalog, read_cpu_clock_mhz, MetricReading, 
 pub use providers::notify::{
     Notification, NotificationIcon, NotificationMonitor, PopupPolicy, Urgency,
 };
+pub use providers::nvidia::present as nvidia_gpu_present;
 pub use providers::weather::{
     fetch_weather, geocode, parse_forecast, parse_geocoding, GeoPlace, WeatherReport,
     WEATHER_ATTRIBUTION,
@@ -63,6 +69,8 @@ pub struct SystemMetrics {
     pub gpu_mem_temp_c: Option<f32>,
     pub gpu_power_w: Option<f32>,
     pub gpu_fan_rpm: Option<u32>,
+    /// Fan speed in percent where the GPU reports no RPM (NVIDIA).
+    pub gpu_fan_percent: Option<f32>,
     pub volume_percent: Option<u8>,
     /// Default sink muted; `volume_percent` keeps the level while muted.
     pub volume_muted: Option<bool>,
@@ -677,6 +685,9 @@ pub struct SensorConfig {
     /// alongside the older per-entity `home_assistant` list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home_assistant_server: Option<HomeAssistantServer>,
+    /// OBS Studio's websocket server, for OBS buttons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obs_server: Option<ObsServer>,
 }
 
 /// How the sensors page presents headlines. Read by the daemon on every
@@ -1237,6 +1248,21 @@ fn normalize_sensor_config(config: &mut SensorConfig) {
         .is_some_and(|server| server.url.is_empty())
     {
         config.home_assistant_server = None;
+    }
+    if let Some(server) = config.obs_server.as_mut() {
+        let host = server.host.trim();
+        server.host = host
+            .strip_prefix('[')
+            .and_then(|inner| inner.strip_suffix(']'))
+            .unwrap_or(host)
+            .to_string();
+    }
+    if config
+        .obs_server
+        .as_ref()
+        .is_some_and(|server| server.host.is_empty() || server.port == 0)
+    {
+        config.obs_server = None;
     }
     for ifttt in &mut config.ifttt {
         ifttt.id = sanitize_sensor_id(&ifttt.id);
@@ -1927,6 +1953,7 @@ fn collect_core_metrics_into(metrics: &mut SystemMetrics) {
     // amdgpu publishes load and VRAM in sysfs; rocm-smi is a Python program
     // costing ~0.2 s of CPU per call, so it is only a throttled fallback.
     let rocm = read_amdgpu_sysfs(Path::new("/sys/class/drm")).or_else(read_rocm_smi_throttled);
+    let nvidia = providers::nvidia::read();
     let (volume_percent, volume_muted) = read_volume();
     let (media, mpris_players) = providers::media::current_media_and_players(None);
 
@@ -1942,6 +1969,15 @@ fn collect_core_metrics_into(metrics: &mut SystemMetrics) {
     metrics.gpu_mem_temp_c = hwmon.gpu_mem_temp_c;
     metrics.gpu_power_w = hwmon.gpu_power_w;
     metrics.gpu_fan_rpm = hwmon.gpu_fan_rpm;
+    if let Some(gpu) = nvidia.filter(|gpu| nvidia_is_main_gpu(gpu, rocm.as_ref())) {
+        metrics.gpu_usage = gpu.usage;
+        metrics.vram_usage = gpu.vram_usage();
+        metrics.gpu_temp_c = gpu.temp_c;
+        metrics.gpu_mem_temp_c = None;
+        metrics.gpu_power_w = gpu.power_w;
+        metrics.gpu_fan_rpm = None;
+        metrics.gpu_fan_percent = gpu.fan_percent;
+    }
     metrics.volume_percent = volume_percent;
     metrics.volume_muted = volume_muted;
     metrics.network_rx_bps = network.map(|net| net.rx_bps);
@@ -2263,6 +2299,18 @@ fn first_fan_rpm(path: &Path) -> Option<u32> {
 struct RocmMetrics {
     gpu_usage: Option<f32>,
     vram_usage: Option<f32>,
+    vram_total_bytes: Option<u64>,
+}
+
+/// With an AMD and an NVIDIA GPU, the `gpu.*` readings follow the one with
+/// more video memory: usually the graphics card next to a processor's
+/// integrated GPU.
+fn nvidia_is_main_gpu(nvidia: &providers::nvidia::NvidiaGpu, amd: Option<&RocmMetrics>) -> bool {
+    let Some(amd_total) = amd.and_then(|amd| amd.vram_total_bytes) else {
+        return true;
+    };
+    let nvidia_total = nvidia.vram_total_mib.unwrap_or(0.0) as f64 * 1024.0 * 1024.0;
+    nvidia_total >= amd_total as f64
 }
 
 /// GPU load and VRAM use of the first amdgpu card, straight from sysfs.
@@ -2286,6 +2334,7 @@ fn read_amdgpu_sysfs(drm: &Path) -> Option<RocmMetrics> {
         Some(RocmMetrics {
             gpu_usage: Some(percent_to_fraction(busy as f32)),
             vram_usage: used.zip(total).map(|(u, t)| u as f32 / t as f32),
+            vram_total_bytes: total.and_then(|t| u64::try_from(t).ok()),
         })
     })
 }
@@ -2328,6 +2377,7 @@ fn parse_rocm_smi_json(input: &str) -> Option<RocmMetrics> {
     Some(RocmMetrics {
         gpu_usage,
         vram_usage,
+        vram_total_bytes: None,
     })
 }
 
@@ -3402,6 +3452,28 @@ PID PPID COMMAND RSS %CPU COMMAND
             channel.items[0].link.as_deref(),
             Some("https://example.test/a")
         );
+    }
+
+    #[test]
+    fn the_gpu_with_more_video_memory_is_the_gpu() {
+        let nvidia = providers::nvidia::NvidiaGpu {
+            address: "0000:01:00.0".into(),
+            usage: Some(0.5),
+            vram_used_mib: None,
+            vram_total_mib: Some(8192.0),
+            temp_c: None,
+            power_w: None,
+            fan_percent: None,
+        };
+        let amd = |total: Option<u64>| RocmMetrics {
+            vram_total_bytes: total,
+            ..RocmMetrics::default()
+        };
+        // A processor's integrated GPU next to a graphics card.
+        assert!(nvidia_is_main_gpu(&nvidia, Some(&amd(Some(512 << 20)))));
+        assert!(!nvidia_is_main_gpu(&nvidia, Some(&amd(Some(24 << 30)))));
+        assert!(nvidia_is_main_gpu(&nvidia, Some(&amd(None))));
+        assert!(nvidia_is_main_gpu(&nvidia, None));
     }
 
     #[test]

@@ -179,6 +179,13 @@ fn health(state: &AppState) -> Response {
             .unwrap_or(&alternatives[0]);
         backend_check(program, purpose, package)
     }));
+    if nexus_sensors::nvidia_gpu_present() {
+        checks.push(backend_check(
+            "nvidia-smi",
+            "NVIDIA GPU readings",
+            "nvidia-utils",
+        ));
+    }
     checks.extend(gnome_focus_check());
     checks.push(conflict_check());
     let daemon = DaemonFacts {

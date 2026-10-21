@@ -14,8 +14,9 @@ The Nexus is a 640 × 48 pixel touch display that Corsair supports only through 
 
 - 15 widget types: clock, sensor readings (number, bar, graph or ring), network speed, now playing with album art and transport controls, a volume slider, buttons with app icons and a running-app dot, scrolling news headlines, weather, Home Assistant switches, Pomodoro/countdown/stopwatch timers, text with live values, images, command output and spacers.
 - Touch that feels native: tap, double tap, hold, repeat while held, drag the volume slider, and swipe between pages with the page following your finger.
-- Actions: launch apps from their desktop entries, open links and folders, media keys over MPRIS, volume and microphone mute through PipeWire or PulseAudio, keyboard shortcuts and typed text (also on Wayland), switch pages and profiles, brightness, lock the screen, call Home Assistant services, send HTTP requests, run programs (opt-in), or chain several actions.
+- Actions: launch apps from their desktop entries, open links and folders, media keys over MPRIS, volume and microphone mute through PipeWire or PulseAudio, keyboard shortcuts and typed text (also on Wayland), switch pages and profiles, brightness, lock the screen, call Home Assistant services, control OBS Studio (record, stream, scenes, mute), send HTTP requests, run programs (opt-in), or chain several actions.
 - Desktop notifications, volume changes and track changes appear as short overlays.
+- OBS Studio buttons show what OBS is doing: recording and stream time, the scene on air, muted sources.
 - Profiles switch on their own when a given app is focused (KDE Plasma, GNOME, Hyprland, Sway, X11), and hidden pages work as folders that close after a timeout.
 - The strip dims or turns off when idle, turns off while the session is locked, and wakes on the first touch without triggering anything.
 
@@ -32,7 +33,7 @@ The Nexus is a 640 × 48 pixel touch display that Corsair supports only through 
 
 **Linux sensors**
 
-CPU, GPU (AMD through amdgpu), memory, disks and network from `/proc` and `/sys`, every hwmon sensor (temperatures, fans, power, voltages), battery levels of wireless mice, keyboards, headsets and controllers through UPower, MPRIS media and PipeWire volume. While the strip shows live readings, the daemon and the helper programs it calls use a few percent of one CPU core.
+CPU, GPU (AMD through amdgpu, NVIDIA through nvidia-smi), memory, disks and network from `/proc` and `/sys`, every hwmon sensor (temperatures, fans, power, voltages), battery levels of wireless mice, keyboards, headsets and controllers through UPower, MPRIS media and PipeWire volume. While the strip shows live readings, the daemon and the helper programs it calls use a few percent of one CPU core.
 
 ## Install
 
@@ -77,7 +78,7 @@ Other software that drives Corsair devices, such as OpenLinkHub, can claim the N
 
 ## Known limitations
 
-- GPU load and VRAM readings support AMD graphics only so far; other GPUs still show their hwmon temperatures and power where the driver exposes them.
+- GPU load and VRAM readings support AMD and NVIDIA graphics; other GPUs (Intel) still show their hwmon temperatures and power where the driver exposes them.
 - App-aware profiles are verified on KDE Plasma; the Hyprland, Sway and X11 watchers are less tested.
 - One Nexus per computer.
 

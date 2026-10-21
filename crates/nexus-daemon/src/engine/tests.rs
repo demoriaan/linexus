@@ -31,6 +31,7 @@ fn engine(runtime: Runtime, scratch: &Scratch) -> Engine {
         dispatcher: Dispatcher::new(true, false, logger.clone(), feedback_tx),
         feedback,
         notifications: crate::notifications::Notifications::off(),
+        obs: crate::obs::Obs::off(),
         focus: crate::focus::Focus::off(),
         logger,
         state_path: None,

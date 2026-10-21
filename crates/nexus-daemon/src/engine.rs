@@ -44,6 +44,7 @@ pub(crate) struct Engine {
     dispatcher: Dispatcher,
     feedback: Receiver<Feedback>,
     notifications: crate::notifications::Notifications,
+    obs: crate::obs::Obs,
     focus: crate::focus::Focus,
     /// Profile to return to when the app that switched profiles loses focus.
     auto_return_profile: Option<String>,
@@ -72,6 +73,7 @@ pub(crate) struct EngineParts {
     pub(crate) dispatcher: Dispatcher,
     pub(crate) feedback: Receiver<Feedback>,
     pub(crate) notifications: crate::notifications::Notifications,
+    pub(crate) obs: crate::obs::Obs,
     pub(crate) focus: crate::focus::Focus,
     pub(crate) logger: nexus_events::EventLogger,
     pub(crate) state_path: Option<PathBuf>,
@@ -92,6 +94,7 @@ impl Engine {
             dispatcher: parts.dispatcher,
             feedback: parts.feedback,
             notifications: parts.notifications,
+            obs: parts.obs,
             focus: parts.focus,
             auto_return_profile: None,
             logger: parts.logger,
@@ -528,6 +531,11 @@ impl Engine {
                     }
                 }
             }
+            ActionSpec::Obs { command, target } => {
+                if let Err(error) = self.obs.send(label, *command, target.clone()) {
+                    self.toast("alert-triangle", error, now);
+                }
+            }
             ActionSpec::Sequence { steps, delay_ms } => {
                 self.sequences += 1;
                 let sequence = self.sequences;
@@ -838,6 +846,8 @@ impl Engine {
                 self.dispatcher.shell_allowed(),
             );
             self.providers.set_wants(wants);
+            self.obs
+                .set_wanted(crate::obs::profile_uses_obs(self.runtime.profile()));
         }
     }
 
@@ -856,6 +866,7 @@ impl Engine {
         self.live.absorb(&snapshot);
         let settings = self.runtime.settings().clone();
         let mut live = self.live.build(&settings, &self.providers.provided());
+        live.obs = self.obs.info(now);
         if let Some(widget) = self
             .runtime
             .page()
@@ -915,7 +926,12 @@ impl Engine {
                 .widgets
                 .iter()
                 .any(|w| matches!(&w.kind, WidgetKind::Clock(p) if p.show_seconds));
-        if seconds_visible {
+        // OBS buttons follow OBS (and count their running time) promptly.
+        let shows_obs = page.widgets.iter().any(|w| {
+            matches!(w.tap, Some(ActionSpec::Obs { .. }))
+                || matches!(&w.kind, WidgetKind::Text(p) if p.text.contains("{obs."))
+        });
+        if seconds_visible || shows_obs {
             interval = interval.min(Duration::from_millis(250));
         }
         if let Some(deadline) = self.touch.next_deadline() {

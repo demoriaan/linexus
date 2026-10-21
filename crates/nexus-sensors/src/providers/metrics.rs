@@ -105,13 +105,16 @@ pub fn metric_catalog(m: &SystemMetrics, hwmon: &[HwmonReading]) -> Vec<MetricRe
         Watts,
         POWER_FULL_SCALE_W,
     );
-    push(
-        "gpu.fan",
-        "GPU fan",
-        m.gpu_fan_rpm.map(|rpm| rpm as f32),
-        Rpm,
-        FAN_FULL_SCALE_RPM,
-    );
+    match (m.gpu_fan_rpm, m.gpu_fan_percent) {
+        (Some(rpm), _) => push(
+            "gpu.fan",
+            "GPU fan",
+            Some(rpm as f32),
+            Rpm,
+            FAN_FULL_SCALE_RPM,
+        ),
+        (None, percent) => push("gpu.fan", "GPU fan", percent, Percent, 100.0),
+    }
     push("gpu.vram", "VRAM", percent(m.vram_usage), Percent, 100.0);
     push("ram.usage", "RAM", percent(m.ram_usage), Percent, 100.0);
     let ram_total = m.ram_total_gib.map(|gib| gib * GIB);
@@ -314,6 +317,17 @@ mod tests {
                 "{absent}"
             );
         }
+
+        // NVIDIA reports its fan in percent.
+        let nvidia = SystemMetrics {
+            gpu_fan_percent: Some(41.0),
+            ..SystemMetrics::default()
+        };
+        let fan = find(&metric_catalog(&nvidia, &[]), "gpu.fan").clone();
+        assert_eq!(
+            (fan.value, fan.unit, fan.max),
+            (41.0, MetricUnit::Percent, 100.0)
+        );
     }
 
     #[test]

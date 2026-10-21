@@ -58,6 +58,8 @@ pub enum ConfigError {
     InvalidUrl { widget: String },
     #[error("widget '{widget}' sends an HTTP content type with a line break")]
     InvalidContentType { widget: String },
+    #[error("widget '{widget}' controls OBS without naming the scene or audio source")]
+    ObsTargetMissing { widget: String },
     #[error("widget '{widget}' nests sequences too deeply")]
     SequenceTooDeep { widget: String },
     #[error(
@@ -295,6 +297,13 @@ fn validate_action(
         } if content_type.contains(['\r', '\n']) => Err(ConfigError::InvalidContentType {
             widget: widget.to_string(),
         }),
+        ActionSpec::Obs { command, target }
+            if command.needs_target() && target.as_deref().is_none_or(|t| t.trim().is_empty()) =>
+        {
+            Err(ConfigError::ObsTargetMissing {
+                widget: widget.to_string(),
+            })
+        }
         ActionSpec::Sequence { steps, delay_ms } => {
             if depth >= 2 {
                 return Err(ConfigError::SequenceTooDeep {

@@ -50,7 +50,7 @@
     --r-xl: 20px;
     --shadow-pop: 0 18px 48px rgb(0 0 0 / 0.5), 0 2px 6px rgb(0 0 0 / 0.3);
     --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
-    --rail-w: 76px;
+    --rail-w: 96px;
     --inspector-w: 360px;
     color-scheme: dark;
   }
@@ -147,14 +147,17 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    padding: 12px 10px;
+    padding: 12px 6px;
     border-right: 1px solid var(--line);
   }
   .rail a {
     display: grid;
+    /* One column as wide as the item, so every icon sits on the same axis
+       however long its label is. */
+    grid-template-columns: minmax(0, 1fr);
     justify-items: center;
     gap: 4px;
-    padding: 10px 4px 8px;
+    padding: 10px 2px 8px;
     border-radius: var(--r-m);
     color: var(--text-3);
     text-decoration: none;
@@ -164,6 +167,7 @@
   .rail a:hover { color: var(--text); background: var(--panel); }
   .rail a[aria-current="page"] { color: var(--text); background: var(--panel-2); }
   .rail a[aria-current="page"] svg { color: var(--accent); }
+  .rail-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rail .grow { flex: 1; }
   .main { grid-area: main; overflow: auto; min-width: 0; }
   .view { padding: 22px 28px 48px; max-width: 1720px; margin: 0 auto; }

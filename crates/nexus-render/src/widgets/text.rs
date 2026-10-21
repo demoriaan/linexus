@@ -119,9 +119,19 @@ fn place(
     }
 }
 
-/// Replaces `{metric.id}` tokens with the current reading.
+/// Replaces `{metric.id}` tokens with the current reading, and the OBS
+/// tokens with OBS's scene and how long the recording and stream run.
 pub fn expand(template: &str, ctx: &Ctx) -> String {
     format::expand_tokens(template, |key| {
+        if let Some(obs_key) = key.strip_prefix("obs.") {
+            let obs = ctx.live.obs.as_ref()?;
+            return match obs_key {
+                "scene" => Some(obs.scene.clone()),
+                "record" => obs.recording.then(|| format::duration(obs.record_ms)),
+                "stream" => obs.streaming.then(|| format::duration(obs.stream_ms)),
+                _ => None,
+            };
+        }
         let metric = ctx.live.metric(key)?;
         Some(format::short(
             metric.value,

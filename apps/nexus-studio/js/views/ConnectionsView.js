@@ -1,5 +1,5 @@
 // Connections: services the strip reads from or talks to — Home Assistant,
-// weather, desktop notifications, and incoming/outgoing webhooks.
+// OBS Studio, weather, desktop notifications, and incoming/outgoing webhooks.
 import { html, useEffect, useState } from "../lib/html.js";
 import { api } from "../lib/api.js";
 import { t } from "../lib/i18n.js";
@@ -7,7 +7,7 @@ import { Icon } from "../lib/icons.js";
 import { config, edit, toast, uniqueId } from "../lib/store.js";
 import { sensors, loadSensors, saveSection } from "../lib/sensors.js";
 import { Switch, ConfirmButton } from "../components/Dialog.js";
-import { Field, TextInput, LocationField } from "../components/Fields.js";
+import { Field, TextInput, LocationField, forgetObsSources } from "../components/Fields.js";
 
 export function ConnectionsView() {
   useEffect(() => { loadSensors(); }, []);
@@ -17,6 +17,7 @@ export function ConnectionsView() {
       <div class="cols">
         <div class="stack" style=${{ gap: "18px" }}>
           <${HomeAssistant} />
+          <${Obs} />
           <${Weather} />
         </div>
         <div class="stack" style=${{ gap: "18px" }}>
@@ -68,6 +69,58 @@ function HomeAssistant() {
         <div class="row">
           <button class="btn" onClick=${test} disabled=${!url || !token}>${t("ha.test")}</button>
           <button class="btn primary" onClick=${save}>${t("common.save")}</button>
+          ${status?.ok && html`<span class="ok-text">${status.ok}</span>`}
+          ${status?.error && html`<span class="bad-text">${status.error}</span>`}
+        </div>
+      </div>
+    </section>`;
+}
+
+function Obs() {
+  const saved = sensors.value?.config?.obs_server ?? null;
+  const [host, setHost] = useState(saved?.host ?? "localhost");
+  const [port, setPort] = useState(saved?.port ?? 4455);
+  const [password, setPassword] = useState(saved?.password ?? "");
+  const [status, setStatus] = useState(null);
+  useEffect(() => {
+    setHost(saved?.host ?? "localhost");
+    setPort(saved?.port ?? 4455);
+    setPassword(saved?.password ?? "");
+  }, [saved?.host, saved?.port, saved?.password]);
+  const server = () => ({ host, port: Number(port) || 0, password });
+  const test = async () => {
+    setStatus({ busy: true });
+    try {
+      const data = await api.post("/api/obs/test", server());
+      setStatus({ ok: t("obs.test.ok", { version: data.version, n: data.scenes }) });
+    } catch (error) {
+      setStatus({ error: error.message });
+    }
+  };
+  const save = async (remove) => {
+    try {
+      await api.post("/api/obs/server", remove ? null : server());
+      await loadSensors();
+      forgetObsSources();
+      toast(t(remove ? "obs.removed" : "obs.saved"), "ok");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  };
+  return html`
+    <section class="panel">
+      <header><${Icon} name="radio" /><h3>OBS Studio</h3>${saved && html`<span class="dot ok" title=${t("obs.saved")}></span>`}</header>
+      <p class="hint" style=${{ marginBottom: "12px" }}>${t("obs.lead")}</p>
+      <div class="stack">
+        <div class="two">
+          <${Field} label=${t("obs.host")}><${TextInput} value=${host} placeholder="localhost" onInput=${setHost} /><//>
+          <${Field} label=${t("obs.port")}><${TextInput} type="number" value=${String(port)} onInput=${setPort} /><//>
+        </div>
+        <${Field} label=${t("obs.password")} hint=${t("obs.password.hint")}><${TextInput} type="password" value=${password} onInput=${setPassword} /><//>
+        <div class="row">
+          <button class="btn" onClick=${test} disabled=${!host || status?.busy}>${t("obs.test")}</button>
+          <button class="btn primary" onClick=${() => save(false)} disabled=${!host}>${t("common.save")}</button>
+          ${saved && html`<button class="btn ghost" onClick=${() => save(true)}>${t("obs.remove")}</button>`}
           ${status?.ok && html`<span class="ok-text">${status.ok}</span>`}
           ${status?.error && html`<span class="bad-text">${status.error}</span>`}
         </div>

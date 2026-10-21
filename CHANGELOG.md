@@ -2,6 +2,17 @@
 
 All notable changes to this project are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- OBS Studio control through its WebSocket server (OBS 28 and newer): buttons that record, pause, stream, switch scenes, mute audio sources, save replay clips and toggle the virtual camera. They show what OBS is doing: a recording or stream lights up with its running time (amber while paused or reconnecting), the scene on air and muted sources are marked, and the buttons fade while OBS is not running. `{obs.scene}`, `{obs.record}` and `{obs.stream}` work in text widgets. Set up the connection in Studio under Connections, where the action editor then lists OBS's scenes and audio sources; the new Streaming page template has a row of OBS buttons. The daemon keeps a connection only while the active profile has OBS widgets. Backups list OBS buttons among the actions that reach outside the strip.
+- NVIDIA graphics cards on the proprietary driver: GPU load, VRAM, temperature, power and fan (in percent) through `nvidia-smi`, for the `gpu.*` readings. With an AMD and an NVIDIA GPU, the readings follow the one with more video memory, so a processor's integrated GPU no longer stands in for the graphics card. A laptop GPU that sleeps while unused is left asleep. `linexusctl doctor` and Studio's setup checks ask for `nvidia-smi` where an NVIDIA GPU needs it.
+
+### Fixed
+
+- The navigation rail in Studio lines its icons up on one axis; longer German labels pushed theirs to the right.
+
 ## [1.2.0] - 2026-10-20
 
 ### Added

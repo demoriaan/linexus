@@ -323,6 +323,65 @@ export function EntityField({ value, onChange, domains }) {
     </select>`;
 }
 
+// ---- OBS scenes and audio sources ------------------------------------------------
+
+let obsSources = null;
+let obsLoading = null;
+/** Counts connection changes, so a load for an older one is not kept. */
+let obsGeneration = 0;
+/** Forgets the lists, e.g. after the connection changed. */
+export function forgetObsSources() {
+  obsSources = null;
+  obsLoading = null;
+  obsGeneration += 1;
+}
+
+/** OBS's scenes and audio sources, fetched once per connection. */
+export function loadObsSources() {
+  if (obsSources) return Promise.resolve(obsSources);
+  const generation = obsGeneration;
+  obsLoading ??= api.get("/api/obs/sources")
+    .then((data) => {
+      if (generation === obsGeneration) obsSources = data;
+      return data;
+    })
+    .finally(() => { if (generation === obsGeneration) obsLoading = null; });
+  return obsLoading;
+}
+
+/**
+ * A name to start a scene or mute button with, since the server refuses an
+ * empty one: OBS's current scene or first audio source when known, else the
+ * names a fresh English OBS uses.
+ */
+export function defaultObsTarget(kind) {
+  if (kind === "scenes") return obsSources?.current_scene || obsSources?.scenes?.[0] || "Scene";
+  return obsSources?.audio_inputs?.[0] || "Mic/Aux";
+}
+
+/** A scene (`kind` "scenes") or audio source ("audio_inputs") of OBS. */
+export function ObsField({ value, onChange, kind }) {
+  const [sources, setSources] = useState(obsSources);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    if (obsSources) return;
+    loadObsSources().then(setSources).catch((e) => setError(e.message));
+  }, []);
+  const names = sources?.[kind] ?? [];
+  if (error || !sources) {
+    return html`
+      <input type="text" value=${value ?? ""} placeholder=${kind === "scenes" ? "Scene" : "Mic/Aux"} onInput=${(e) => onChange(e.currentTarget.value)} />
+      ${error && html`<small class="hint">${t("obs.not.connected")}</small>`}`;
+  }
+  // A name OBS does not list (renamed, or OBS runs another collection) stays choosable.
+  const options = value && !names.includes(value) ? [value, ...names] : names;
+  return html`
+    <select value=${value ?? ""} onChange=${(e) => onChange(e.currentTarget.value)}>
+      ${!value && html`<option value="">${t(kind === "scenes" ? "obs.pick.scene" : "obs.pick.source")}</option>`}
+      ${options.map((name) => html`<option value=${name}>${name}</option>`)}
+    </select>`;
+}
+
 // ---- images --------------------------------------------------------------------------
 
 export function ImageField({ value, onChange, max = 320 }) {

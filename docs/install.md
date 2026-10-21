@@ -40,6 +40,7 @@ Optional desktop tools. Without them only the matching features stop working; `l
 | `loginctl` | systemd | Lock screen action, lock detection |
 | `upower` | upower | Battery levels of wireless mice, keyboards and headsets |
 | `rocm-smi` | rocm-smi-lib | AMD GPU readings where sysfs does not provide them |
+| `nvidia-smi` | nvidia-utils, usually installed with the NVIDIA driver (Fedora: xorg-x11-drv-nvidia-cuda from RPM Fusion; openSUSE: nvidia-compute-utils-G06) | NVIDIA GPU readings |
 
 ## Quick install
 

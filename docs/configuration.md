@@ -7,7 +7,7 @@ Linexus Studio writes the configuration for you. This page describes the file fo
 | Path | Content | Edited in |
 |---|---|---|
 | `~/.config/linexus/config.json` | Profiles, pages, widgets, actions and device settings. The format on this page. | Studio: Pages, Device, Connections (weather, notifications) |
-| `~/.config/linexus/sensors.json` | News feeds, headline movement, incoming webhook rules, the Home Assistant connection, MQTT and IFTTT. | Studio: News, Connections |
+| `~/.config/linexus/sensors.json` | News feeds, headline movement, incoming webhook rules, the Home Assistant and OBS Studio connections, MQTT and IFTTT. | Studio: News, Connections |
 | `~/.local/state/linexus/runtime.json` | Last active profile, page and brightness, restored when the daemon starts | Written by the daemon |
 | `~/.local/state/linexus/events.jsonl` | Event log, see [local-api.md](local-api.md#event-log) | Written by the daemon |
 | `~/.local/state/linexus/rss-cache/`, `rss-seen.json`, `webhooks/` | Feed caches, read and hidden headlines, received webhooks | Written by the daemon and Studio |
@@ -247,6 +247,8 @@ Built-in touch: slide along the bar to set the volume; tap the speaker icon to m
 | `show_label` | `true` | Show the label |
 | `running_indicator` | `true` | For buttons whose tap action is `launch_app`: show a dot while that application runs |
 
+A button whose tap action is [`obs`](#obs) shows what OBS is doing: a recording or stream lights up red with its running time in place of the label (amber while a recording is paused or a stream reconnects), the scene on air and an active replay buffer or virtual camera light up in the accent colour, and a muted source lights up red (a `mic` or `volume` icon is crossed out). While OBS is not connected, and where the button has nothing to act on (pause without a recording, a replay clip without a replay buffer), it is faded.
+
 ### news
 
 Two rows of headlines from the feeds and webhooks configured in Studio.
@@ -296,7 +298,7 @@ Built-in touch: tap starts or pauses, double tap skips to the next phase, hold r
 
 | Field | Default | Meaning |
 |---|---|---|
-| `text` | `"Hello"` | The text. `{metric id}` tokens are replaced with live values, for example `CPU {cpu.temp}`. |
+| `text` | `"Hello"` | The text. `{metric id}` tokens are replaced with live values, for example `CPU {cpu.temp}`. `{obs.scene}` is OBS's scene on air, `{obs.record}` and `{obs.stream}` how long the recording and the stream run. A token without a value shows `–`. |
 | `size` | `"medium"` | `small`, `medium` or `large` |
 | `align` | `"center"` | `left`, `center` or `right` |
 | `caption` | not set | Small caption above the text |
@@ -327,7 +329,7 @@ Empty space. No fields of its own. A spacer can still carry actions.
 
 An action is an object with a `type`. It goes into a widget's `tap`, `double_tap` or `hold`.
 
-Page and profile actions, `brightness`, `display_off` and `sequence` are handled by the daemon itself. Everything else, Home Assistant calls included, runs one after another on a background worker, so a slow action never stalls the strip. When an action fails, the strip shows a short message and the event log records `action_failed`.
+Page and profile actions, `brightness`, `display_off` and `sequence` are handled by the daemon itself. OBS commands go to the daemon's OBS connection. Everything else, Home Assistant calls included, runs one after another on a background worker, so a slow action never stalls the strip. When an action fails, the strip shows a short message and the event log records `action_failed`.
 
 ### open_url
 
@@ -447,6 +449,26 @@ Calls a Home Assistant service through the connection saved in Studio. `service`
 { "type": "home_assistant", "service": "light.toggle", "entity_id": "light.desk" }
 ```
 
+### obs
+
+Controls OBS Studio through its WebSocket server (OBS 28 or newer), using the connection saved in Studio under Connections. The daemon connects only while the active profile has OBS buttons or `{obs.*}` text.
+
+| `command` | Does |
+|---|---|
+| `toggle_record`, `start_record`, `stop_record` | Recording |
+| `pause_record` | Pauses a running recording, or resumes a paused one |
+| `toggle_stream`, `start_stream`, `stop_stream` | Streaming |
+| `set_scene` | Switches the program output to the scene named in `target` |
+| `toggle_mute` | Mutes or unmutes the audio source named in `target` |
+| `toggle_replay_buffer`, `save_replay` | Starts or stops the replay buffer; saves its contents as a clip |
+| `toggle_virtual_cam` | Starts or stops the virtual camera |
+
+`set_scene` and `toggle_mute` need `target`, the name as OBS shows it.
+
+```json
+{ "type": "obs", "command": "set_scene", "target": "Gameplay" }
+```
+
 ### next_page, previous_page
 
 Same as swiping. The older names `screen_next` and `screen_previous` are accepted.
@@ -548,7 +570,7 @@ linexusctl daemon metrics temp
 | `gpu.temp` | °C | GPU temperature |
 | `gpu.mem_temp` | °C | VRAM temperature |
 | `gpu.power` | W | GPU power |
-| `gpu.fan` | rpm | GPU fan |
+| `gpu.fan` | rpm or % | GPU fan; NVIDIA reports percent of the maximum |
 | `gpu.vram` | % | VRAM in use |
 | `ram.usage` | % | Memory in use |
 | `ram.used` | bytes | Memory in use |
@@ -561,6 +583,8 @@ linexusctl daemon metrics temp
 | `volume.level` | % | Output volume |
 | `hwmon:<chip>/<label>` | °C, rpm, W or V | One per hardware sensor input |
 | `battery:<kind>/<key>` | % | One per battery |
+
+The `gpu.*` readings come from an AMD GPU (sysfs and hwmon) or an NVIDIA GPU on the proprietary driver (`nvidia-smi`). With both, they follow the one with more video memory, which is usually the graphics card rather than the processor's integrated GPU. An NVIDIA GPU in a laptop that sleeps while unused is not asked while it sleeps: `gpu.*` then shows the integrated AMD GPU where there is one, and is left out otherwise.
 
 `hwmon:<chip>/<label>`: `<chip>` is the hwmon driver name, `<label>` the driver's label for the input or the input name (`temp1`, `fan2`). Both are lower-cased, and characters other than letters, digits, `-` and `.` become `_`. When two inputs end up with the same id, the later ones get `-2`, `-3` and so on. Examples: `hwmon:k10temp/tctl`, `hwmon:amdgpu/edge`, `hwmon:nct6798/fan2`.
 
@@ -618,7 +642,7 @@ A `.nexuspack` is a backup or a shareable set of profiles. It is a zip archive w
 | `manifest.json` | Summary of the pack, at most 1 MiB |
 | `config.json` | The complete `config.json`, at most 64 MiB |
 
-Images are embedded in the config as data URLs, so there are no other files. A pack holds `config.json` only: feeds, the Home Assistant token and other entries of `sensors.json` are not included. URLs and request bodies in your actions are included as written.
+Images are embedded in the config as data URLs, so there are no other files. A pack holds `config.json` only: feeds, the Home Assistant token, the OBS password and other entries of `sensors.json` are not included. URLs and request bodies in your actions are included as written.
 
 `manifest.json`:
 

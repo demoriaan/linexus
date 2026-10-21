@@ -372,6 +372,13 @@ fn check_tools(report: &mut Report) {
             None => missing.push((bins.join(" or "), purpose)),
         }
     }
+    // Only asked for where an NVIDIA GPU runs the proprietary driver.
+    if nexus_sensors::nvidia_gpu_present() {
+        match which("nvidia-smi") {
+            Some(_) => present.push("nvidia-smi"),
+            None => missing.push(("nvidia-smi".into(), "NVIDIA GPU readings")),
+        }
+    }
     if !present.is_empty() {
         report.check(Level::Ok, present.join(", "));
     }

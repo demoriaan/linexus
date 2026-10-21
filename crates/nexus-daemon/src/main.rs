@@ -8,6 +8,7 @@ mod log;
 mod metrics_cache;
 mod news;
 mod notifications;
+mod obs;
 mod runtime;
 mod scene;
 mod session;
@@ -126,6 +127,11 @@ fn main() -> Result<()> {
     };
 
     let (feedback_tx, feedback_rx) = mpsc::channel();
+    let obs = if args.once {
+        obs::Obs::off()
+    } else {
+        obs::Obs::on(feedback_tx.clone(), logger.clone(), args.dry_run_actions)
+    };
     let dispatcher = dispatch::Dispatcher::new(
         args.dry_run_actions,
         args.allow_shell_actions,
@@ -144,6 +150,7 @@ fn main() -> Result<()> {
         dispatcher,
         feedback: feedback_rx,
         notifications,
+        obs,
         focus,
         logger: logger.clone(),
         state_path: (!args.once).then_some(state_path),

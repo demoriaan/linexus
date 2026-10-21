@@ -44,11 +44,12 @@ pub enum PageTemplate {
     News,
     Focus,
     Home,
+    Streaming,
     Blank,
 }
 
 impl PageTemplate {
-    pub const ALL: [PageTemplate; 8] = [
+    pub const ALL: [PageTemplate; 9] = [
         Self::Overview,
         Self::Performance,
         Self::Media,
@@ -56,6 +57,7 @@ impl PageTemplate {
         Self::News,
         Self::Focus,
         Self::Home,
+        Self::Streaming,
         Self::Blank,
     ];
 
@@ -68,6 +70,7 @@ impl PageTemplate {
             Self::News => "News",
             Self::Focus => "Focus",
             Self::Home => "Home",
+            Self::Streaming => "Streaming",
             Self::Blank => "Blank",
         }
     }
@@ -238,6 +241,58 @@ pub fn template_page(template: PageTemplate, id: &str) -> Page {
             entity("lamp", 360, 140, "light.desk", "Desk", "lucide:lamp-desk"),
             entity("fan", 500, 140, "switch.fan", "Fan", "lucide:fan"),
         ],
+        PageTemplate::Streaming => {
+            // "Mic/Aux" and "Scene" are the names a fresh English OBS uses.
+            let buttons = [
+                (
+                    "record",
+                    "Record",
+                    "lucide:circle-dot",
+                    obs(ObsCommand::ToggleRecord, None),
+                ),
+                (
+                    "pause",
+                    "Pause",
+                    "lucide:circle-pause",
+                    obs(ObsCommand::PauseRecord, None),
+                ),
+                (
+                    "stream",
+                    "Stream",
+                    "lucide:radio",
+                    obs(ObsCommand::ToggleStream, None),
+                ),
+                (
+                    "mic",
+                    "Mic",
+                    "lucide:mic",
+                    obs(ObsCommand::ToggleMute, Some("Mic/Aux")),
+                ),
+                (
+                    "scene",
+                    "Scene",
+                    "lucide:clapperboard",
+                    obs(ObsCommand::SetScene, Some("Scene")),
+                ),
+                (
+                    "clip",
+                    "Clip",
+                    "lucide:film",
+                    obs(ObsCommand::SaveReplay, None),
+                ),
+            ];
+            let widths = [107u16, 107, 106, 107, 107, 106];
+            let mut x = 0;
+            buttons
+                .into_iter()
+                .zip(widths)
+                .map(|((wid, label, icon, action), w)| {
+                    let widget = button(wid, x, w, label, icon).with_tap(action);
+                    x += w;
+                    widget
+                })
+                .collect()
+        }
         PageTemplate::Blank => Vec::new(),
     };
     Page {
@@ -295,6 +350,13 @@ fn entity(id: &str, x: u16, w: u16, entity_id: &str, label: &str, icon: &str) ->
             icon: Some(icon.into()),
         }),
     )
+}
+
+fn obs(command: ObsCommand, target: Option<&str>) -> ActionSpec {
+    ActionSpec::Obs {
+        command,
+        target: target.map(Into::into),
+    }
 }
 
 fn launch(target: &str) -> ActionSpec {

@@ -8,7 +8,7 @@ mod media;
 mod metric;
 mod network;
 pub mod news;
-mod text;
+pub(crate) mod text;
 mod timer;
 mod volume;
 mod weather;

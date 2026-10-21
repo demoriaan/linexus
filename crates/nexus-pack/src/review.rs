@@ -4,7 +4,8 @@
 //! change what the strip shows; the ones listed here act on the computer
 //! with the user's rights as soon as a button is tapped: they run programs,
 //! type into the focused window (a line break presses Enter, so text typed
-//! into a terminal runs as a command), send web requests or open things.
+//! into a terminal runs as a command), send web requests, open things or
+//! start an OBS stream.
 
 use crate::{load_checked, profile_summary, PackProfileSummary};
 use anyhow::Result;
@@ -27,6 +28,7 @@ pub enum ReachKind {
     TextInput,
     KeyboardShortcut,
     HttpRequest,
+    ObsStudio,
     LaunchApp,
     OpenPath,
     OpenUrl,
@@ -42,6 +44,7 @@ impl ReachKind {
             Self::TextInput => "Type text into the focused window (a line break presses Enter)",
             Self::KeyboardShortcut => "Press keyboard shortcuts",
             Self::HttpRequest => "Send web requests",
+            Self::ObsStudio => "Control OBS Studio: recording, streaming, scenes and audio",
             Self::LaunchApp => "Start applications",
             Self::OpenPath => "Open files and folders",
             Self::OpenUrl => "Open web pages",
@@ -139,6 +142,17 @@ fn visit(action: &ActionSpec, in_sequence: bool, emit: &mut impl FnMut(ReachKind
                 None => service.clone(),
             };
             (ReachKind::HomeAssistant, detail)
+        }
+        ActionSpec::Obs { command, target } => {
+            let command = serde_json::to_value(command)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_string))
+                .unwrap_or_default();
+            let detail = match target {
+                Some(target) => format!("{command} {target}"),
+                None => command,
+            };
+            (ReachKind::ObsStudio, detail)
         }
         ActionSpec::Sequence { steps, .. } => {
             for step in steps {

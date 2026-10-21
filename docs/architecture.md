@@ -20,7 +20,7 @@ A map of the code for contributors: which crate owns what, how the daemon is put
 | `nexus-core` | library | USB ids, frame encoding (`panel_frame`, `image_reports`), control reports, touch report parser, the simple gesture recognizer used by `linexusctl touch`, HID enumeration, the udev rule text, the device lock | |
 | `nexus-render` | library | The renderer: a page plus `LiveData` in, a 640 x 48 RGBA `Canvas` out. Widgets, theme palettes, fonts, Lucide icons, overlays, page transitions, PNG encoding. No file, device or network access. | config, core |
 | `nexus-config` | library | Config schema 2: model, validation, defaults and page templates, schema 1 migration, atomic load and save, conversion of `ActionSpec` into desktop actions | actions |
-| `nexus-sensors` | library | Everything the strip displays from outside: `/proc` and sysfs metrics, hwmon, GPU, volume, MPRIS, running and installed apps, batteries, weather, Home Assistant, RSS and Atom feeds, webhooks, desktop notifications, focus watchers, command output, `sensors.json`, MQTT and IFTTT | |
+| `nexus-sensors` | library | Everything the strip displays from outside: `/proc` and sysfs metrics, hwmon, GPU, volume, MPRIS, running and installed apps, batteries, weather, Home Assistant, the OBS Studio WebSocket client, RSS and Atom feeds, webhooks, desktop notifications, focus watchers, command output, `sensors.json`, MQTT and IFTTT | |
 | `nexus-actions` | library | Plans and runs desktop actions through `xdg-open`, `gtk-launch`, `kioclient`, `wpctl` or `pactl`, `busctl`, `curl`, `loginctl` and the input helper; probes which of these exist; reads the graphical session environment and default applications | input |
 | `nexus-input` | library | Input helper protocol: request and response types, socket paths, client | |
 | `nexus-ipc` | library | Daemon API: `Command`, `Response`, `DaemonStatus`, socket path, client | |
@@ -43,6 +43,7 @@ A map of the code for contributors: which crate owns what, how the daemon is put
 | Provider worker | `live.rs` | Fetches slow or remote data, only for widgets the active profile contains |
 | Action worker | `dispatch.rs` | Runs actions one after another from a queue of 64; reports failures back to the engine |
 | Notification monitor and preparer | `nexus_sensors::NotificationMonitor`, `notifications.rs` | While notifications are turned on: follow the session bus with `busctl monitor`, check whether the desktop would show the notification (Do Not Disturb, the app's settings), load the picture and the app icon |
+| OBS worker | `obs.rs` | While the active profile has OBS widgets and a connection is saved: keep the obs-websocket connection, follow OBS's state, send button commands |
 | Focus watcher | `nexus_sensors::FocusWatcher` | Reports the focused application (KWin, GNOME, Hyprland, Sway or X11) |
 
 Lock and sleep detection (`session.rs`) is no thread: the main loop polls it at most once per second.
@@ -60,6 +61,7 @@ Lock and sleep detection (`session.rs`) is no thread: the main loop polls it at 
 | `live.rs` | `LiveBuilder` (metric history for graphs, assembly of `LiveData`) and the provider worker |
 | `metrics_cache.rs` | Metrics worker and its snapshot |
 | `dispatch.rs` | Action worker, the `--allow-shell-actions` gate, Home Assistant service calls |
+| `obs.rs` | OBS worker: stays connected to OBS while the active profile has OBS widgets, follows scene, outputs and mute state, sends the buttons' commands |
 | `ipc.rs` | Socket server |
 | `session.rs` | Session lock and sleep detection through `loginctl` and `busctl` |
 | `timers.rs` | Timer widget state: pomodoro phases, countdown, stopwatch |
@@ -133,6 +135,7 @@ Single taps fire on release unless the widget also has a double-tap meaning; onl
 |---|---|---|
 | CPU, memory, disk, network, GPU, volume, now playing | `/proc`, sysfs, `wpctl` or `pactl`, `busctl` | Every second, paused while the strip is off |
 | AMD GPU via `rocm-smi` | `rocm-smi`, where sysfs has no values | At most every 5 s |
+| NVIDIA GPU | One long-running `nvidia-smi --query-gpu … --loop-ms=1000`, stopped 15 s after the last reading. When it prints nothing for 10 s it is stopped, and a new one starts once it has ended; the wait doubles up to 5 min while that keeps happening. A GPU with runtime power management that is not the boot display (the graphics card of a hybrid laptop) gets a single query instead, only when sysfs says it is awake right then, and at most every 10 s (twice its autosuspend delay when that is longer). The answer is shared through `$XDG_RUNTIME_DIR/linexus/nvidia-query`, so all Linexus processes together keep that pace and the GPU can still go to sleep | Every second |
 | hwmon sensors | `/sys/class/hwmon` | Cached 5 s |
 | Running applications (button dots) | `/proc` | Cached 5 s |
 | Installed applications | Desktop files | Cached 60 s |
@@ -141,6 +144,7 @@ Single taps fire on release unless the widget also has a double-tap meaning; onl
 | Webhook cards | `~/.local/state/linexus/webhooks/` | With every metrics collection |
 | Weather | Open-Meteo through `curl` | 15 min per location; 60 s after a failure |
 | Home Assistant entities | Home Assistant REST API through `curl` | 5 s, and shortly after a toggle |
+| OBS Studio | obs-websocket 5 events (scene, scene collection, outputs, mute); running times asked while recording or streaming, the scene every 10 s otherwise | As they happen; running times every second. Connected only while the active profile has OBS widgets; reconnects after 2 s, backing off to 15 s (30 s after a refused password). Messages over 1 MiB end the connection; events it does not use are dropped as they arrive |
 | Command widget output | The configured program, 5 s timeout | The widget's interval, at least 2 s |
 | Album art, application icons | Art URL from MPRIS, icon themes | When first needed |
 | Desktop notifications | `busctl monitor` on the session bus (`Notify`, GApplication and portal calls) | As they arrive |
@@ -161,6 +165,7 @@ The provider worker re-reads the active profile's "wants" every second, so switc
 | `api/daemon.rs` | Daemon commands and `systemctl --user` for the daemon unit |
 | `api/catalog.rs` | Icons, installed apps, app icons, geocoding, weather |
 | `api/sensors.rs` | `sensors.json`, feeds, Home Assistant, webhooks, MQTT and IFTTT tests |
+| `api/obs.rs` | OBS connection test, saving it, scenes and audio sources for the pickers |
 | `api/system.rs` | Setup checks, event log, version, session token |
 | `assets.rs` | Serving the frontend, token injection, ETag |
 | `state.rs` | Paths, port and the per-start token |

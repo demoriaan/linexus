@@ -107,6 +107,24 @@ pub struct EntityInfo {
     pub on: Option<bool>,
 }
 
+/// OBS Studio's state while the daemon is connected to it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ObsInfo {
+    /// Scene on the program output.
+    pub scene: String,
+    pub streaming: bool,
+    /// The stream lost its connection and OBS is trying again.
+    pub stream_reconnecting: bool,
+    pub stream_ms: u64,
+    pub recording: bool,
+    pub record_paused: bool,
+    pub record_ms: u64,
+    pub replay_buffer: bool,
+    pub virtual_cam: bool,
+    /// Mute state per audio source name.
+    pub muted: HashMap<String, bool>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TimerPhase {
     #[default]
@@ -216,6 +234,8 @@ pub struct LiveData {
     pub running: HashSet<String>,
     /// Resolved images for `app:` icon references, keyed by the reference.
     pub images: HashMap<String, Arc<Pixmap>>,
+    /// None while OBS is not connected (or not set up).
+    pub obs: Option<ObsInfo>,
 }
 
 impl LiveData {

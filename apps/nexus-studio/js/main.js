@@ -37,8 +37,8 @@ function Rail() {
   return html`
     <nav class="rail" aria-label=${t("nav.label")}>
       ${Object.entries(VIEWS).map(([id, { icon }]) => html`
-        <a href=${`#${id}`} aria-current=${route.value === id ? "page" : undefined}>
-          <${Icon} name=${icon} />${t(`nav.${id}`)}
+        <a href=${`#${id}`} title=${t(`nav.${id}`)} aria-current=${route.value === id ? "page" : undefined}>
+          <${Icon} name=${icon} /><span class="rail-label">${t(`nav.${id}`)}</span>
         </a>`)}
     </nav>`;
 }

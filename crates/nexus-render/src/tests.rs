@@ -262,3 +262,60 @@ fn format_helpers() {
         "CPU 5% / –"
     );
 }
+
+#[test]
+fn obs_buttons_show_what_obs_does() {
+    let page = template_page(PageTemplate::Streaming, "stream");
+    let theme = Theme::default();
+    let mut live = preview::sample_live(Locale::En);
+    // Red (not amber) pixels in the record button (the first 107 px).
+    let red = |canvas: &Canvas| {
+        canvas
+            .rgba()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(i, px)| {
+                let [r, g, b] = [px[0], px[1], px[2]].map(u16::from);
+                i % WIDTH < 107 && r > 2 * g + 20 && r > b + 40
+            })
+            .count()
+    };
+    let recording = render_page(&page, &theme, &live, &ui());
+    snapshot("obs-recording", &recording);
+    live.obs.as_mut().unwrap().recording = false;
+    let stopped = render_page(&page, &theme, &live, &ui());
+    live.obs = None;
+    let offline = render_page(&page, &theme, &live, &ui());
+    snapshot("obs-offline", &offline);
+    assert!(red(&recording) > 30, "{}", red(&recording));
+    assert!(red(&stopped) < red(&recording) / 4, "{}", red(&stopped));
+    assert_ne!(stopped.rgba(), offline.rgba());
+    // Paused: the recording turns amber and its time stands still.
+    let mut paused_live = preview::sample_live(Locale::En);
+    paused_live.obs.as_mut().unwrap().record_paused = true;
+    let paused = render_page(&page, &theme, &paused_live, &ui());
+    snapshot("obs-paused", &paused);
+    assert!(red(&paused) < red(&recording) / 4, "{}", red(&paused));
+    assert_ne!(paused.rgba(), stopped.rgba());
+
+    let mut live = preview::sample_live(Locale::En);
+    let palette = Palette::for_theme(&theme);
+    let ctx = widgets::Ctx {
+        palette: &palette,
+        live: &live,
+        ui: &ui(),
+    };
+    assert_eq!(
+        widgets::text::expand("{obs.scene} {obs.record} {obs.stream}", &ctx),
+        "Scene 12:34 –"
+    );
+    live.obs = None;
+    let ctx = widgets::Ctx {
+        palette: &palette,
+        live: &live,
+        ui: &ui(),
+    };
+    assert_eq!(widgets::text::expand("{obs.scene}", &ctx), "–");
+}
