@@ -1,15 +1,17 @@
-//! `render-preview`: draws a page or a test pattern into a PNG with sample
-//! data, without the daemon or the device.
+//! `render-preview`: draws a page, a pop-up or a test pattern into a PNG
+//! with sample data, without the daemon or the device.
 
 use anyhow::{bail, Context, Result};
 use clap::builder::PossibleValuesParser;
-use nexus_config::{NexusConfig, Page, PageTemplate, TemperatureUnit, Theme, WidgetKind};
+use nexus_config::{
+    NexusConfig, Page, PageTemplate, TemperatureUnit, Theme, TimerMode, TimerProps, WidgetKind,
+};
 use nexus_core::{HEIGHT, WIDTH};
-use nexus_render::{preview, Locale, UiState};
+use nexus_render::{preview, Locale, Overlay, TimerInfo, TimerPhase, UiState};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, clap::Args)]
-#[command(group(clap::ArgGroup::new("source").args(["template", "config", "pattern"])))]
+#[command(group(clap::ArgGroup::new("source").args(["template", "config", "pattern", "overlay"])))]
 pub(crate) struct RenderPreviewArgs {
     /// Built-in page template (the default is `overview`).
     #[arg(long, value_enum)]
@@ -26,6 +28,9 @@ pub(crate) struct RenderPreviewArgs {
     /// Hardware test pattern instead of a page.
     #[arg(long, value_enum)]
     pattern: Option<Pattern>,
+    /// Pop-up that covers the strip for a moment instead of a page.
+    #[arg(long, value_enum)]
+    overlay: Option<OverlayArg>,
     /// Colour theme; the profile's theme (or midnight) when omitted.
     #[arg(long, value_parser = PossibleValuesParser::new(nexus_render::PRESETS), conflicts_with = "pattern")]
     theme: Option<String>,
@@ -49,6 +54,7 @@ pub(crate) enum TemplateArg {
     News,
     Focus,
     Home,
+    Streaming,
     Blank,
 }
 
@@ -62,7 +68,37 @@ impl From<TemplateArg> for PageTemplate {
             TemplateArg::News => Self::News,
             TemplateArg::Focus => Self::Focus,
             TemplateArg::Home => Self::Home,
+            TemplateArg::Streaming => Self::Streaming,
             TemplateArg::Blank => Self::Blank,
+        }
+    }
+}
+
+/// Pop-ups the daemon shows over the current page.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub(crate) enum OverlayArg {
+    /// A desktop notification.
+    Notification,
+    /// A volume change.
+    Volume,
+    /// A new track.
+    Track,
+}
+
+impl OverlayArg {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Notification => "notification",
+            Self::Volume => "volume",
+            Self::Track => "track",
+        }
+    }
+
+    fn sample(self, live: &nexus_render::LiveData) -> Overlay {
+        match self {
+            Self::Notification => preview::sample_notification(live.locale),
+            Self::Volume => Overlay::Volume(live.volume.unwrap_or_default()),
+            Self::Track => Overlay::NowPlaying(Box::new(live.media.clone().unwrap_or_default())),
         }
     }
 }
@@ -112,6 +148,13 @@ pub(crate) fn run(args: RenderPreviewArgs) -> Result<()> {
         (pattern.frame(), format!("pattern {}", pattern.name()))
     } else if let Some(path) = &args.config {
         render_from_config(path, &args)?
+    } else if let Some(overlay) = args.overlay {
+        // A fully shown pop-up covers the whole strip, so no page is drawn.
+        let theme = theme_with_preset(Theme::default(), args.theme.as_deref());
+        let live = preview::sample_live(args.locale.map_or(Locale::En, Locale::from));
+        let mut canvas = nexus_render::Canvas::new();
+        nexus_render::draw_overlay(&mut canvas, &overlay.sample(&live), &theme, &live, 1.0);
+        (canvas.into_rgba(), format!("overlay {}", overlay.name()))
     } else {
         let template = PageTemplate::from(args.template.unwrap_or(TemplateArg::Overview));
         let page = nexus_config::template_page(template, "preview");
@@ -207,11 +250,12 @@ fn fill_sample_for_page(live: &mut nexus_render::LiveData, page: &Page) {
     let entity = live.entities.values().next().cloned();
     for widget in &page.widgets {
         match &widget.kind {
-            WidgetKind::Timer(_) => {
+            WidgetKind::Timer(props) => {
+                // Replaces the pomodoro sample too: the Focus template's
+                // timer has its id, whatever mode the user gave it.
                 if let Some(timer) = &timer {
                     live.timers
-                        .entry(widget.id.clone())
-                        .or_insert_with(|| timer.clone());
+                        .insert(widget.id.clone(), sample_timer(props, timer));
                 }
             }
             WidgetKind::Weather(props) => {
@@ -239,6 +283,34 @@ fn fill_sample_for_page(live: &mut nexus_render::LiveData, page: &Page) {
             }
             _ => {}
         }
+    }
+}
+
+/// The pomodoro sample, or a running countdown or stopwatch as the daemon
+/// reports them.
+fn sample_timer(props: &TimerProps, pomodoro: &TimerInfo) -> TimerInfo {
+    match props.mode {
+        TimerMode::Pomodoro => pomodoro.clone(),
+        TimerMode::Countdown => {
+            let length_s = u64::from(props.minutes.max(1)) * 60;
+            let left_s = length_s * 42 / 100;
+            TimerInfo {
+                phase: TimerPhase::Running,
+                display_ms: left_s * 1000,
+                progress: 1.0 - left_s as f32 / length_s as f32,
+                stage: "",
+                round: 0,
+                rounds: 0,
+            }
+        }
+        TimerMode::Stopwatch => TimerInfo {
+            phase: TimerPhase::Running,
+            display_ms: 12 * 60_000 + 48_000,
+            progress: 48.0 / 60.0,
+            stage: "",
+            round: 0,
+            rounds: 0,
+        },
     }
 }
 
@@ -292,6 +364,11 @@ mod tests {
 
     #[test]
     fn every_template_renders_a_full_frame() {
+        assert_eq!(
+            TemplateArg::value_variants().len(),
+            PageTemplate::ALL.len(),
+            "render-preview offers every template"
+        );
         let live = preview::sample_live(Locale::De);
         for arg in TemplateArg::value_variants() {
             let page = nexus_config::template_page(PageTemplate::from(*arg), "p");
@@ -334,6 +411,78 @@ mod tests {
         let mut live = preview::sample_live(Locale::En);
         fill_sample_for_page(&mut live, &page);
         assert!(live.timers.contains_key("pomodoro"));
+    }
+
+    #[test]
+    fn every_overlay_covers_the_strip() {
+        let live = preview::sample_live(Locale::En);
+        for arg in OverlayArg::value_variants() {
+            let mut canvas = nexus_render::Canvas::new();
+            nexus_render::draw_overlay(
+                &mut canvas,
+                &arg.sample(&live),
+                &Theme::default(),
+                &live,
+                1.0,
+            );
+            let rgba = canvas.into_rgba();
+            assert_eq!(rgba.len(), nexus_core::FRAME_BYTES, "{arg:?}");
+            // Opaque from edge to edge: nothing of a page would show through.
+            assert!(rgba.chunks(4).all(|px| px[3] == 255), "{arg:?}");
+        }
+    }
+
+    #[test]
+    fn timer_samples_follow_the_widget_mode() {
+        let live = preview::sample_live(Locale::En);
+        let pomodoro = live.timers.values().next().unwrap();
+        let props = |mode| TimerProps {
+            mode,
+            minutes: 10,
+            ..TimerProps::default()
+        };
+
+        let countdown = sample_timer(&props(TimerMode::Countdown), pomodoro);
+        assert_eq!(countdown.phase, TimerPhase::Running);
+        assert_eq!(countdown.display_ms, 252_000);
+        assert_eq!(
+            (countdown.stage, countdown.round, countdown.rounds),
+            ("", 0, 0)
+        );
+        assert!((countdown.progress - 0.58).abs() < 1e-6);
+
+        let stopwatch = sample_timer(&props(TimerMode::Stopwatch), pomodoro);
+        assert_eq!(stopwatch.display_ms, 768_000);
+        assert_eq!(stopwatch.rounds, 0);
+
+        assert_eq!(
+            &sample_timer(&props(TimerMode::Pomodoro), pomodoro),
+            pomodoro
+        );
+    }
+
+    #[test]
+    fn a_countdown_with_the_pomodoros_id_gets_a_countdown_sample() {
+        // The Focus template's timer is called "timer", like the pomodoro
+        // sample; a user who turns it into a countdown must see one.
+        let mut page = nexus_config::template_page(PageTemplate::Focus, "focus");
+        assert_eq!(page.widgets[0].id, "timer");
+        if let WidgetKind::Timer(props) = &mut page.widgets[0].kind {
+            props.mode = TimerMode::Countdown;
+        }
+        let mut live = preview::sample_live(Locale::En);
+        fill_sample_for_page(&mut live, &page);
+        let timer = &live.timers["timer"];
+        assert_eq!(timer.rounds, 0);
+        assert_eq!(timer.display_ms, 25 * 60 * 42 / 100 * 1000);
+    }
+
+    #[test]
+    fn the_sample_notification_follows_the_locale() {
+        let Overlay::Notification { app, .. } = preview::sample_notification(Locale::De) else {
+            panic!("not a notification");
+        };
+        assert_eq!(app, "Kalender");
     }
 
     #[test]

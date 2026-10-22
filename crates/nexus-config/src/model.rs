@@ -165,8 +165,8 @@ pub struct Profile {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Theme {
-    /// Name of a built-in palette (`midnight`, `aurora`, `ember`, `mono`,
-    /// `daylight`).
+    /// Name of a built-in palette (`midnight`, `aurora`, `ember`, `neon`,
+    /// `mono`, `daylight`).
     pub preset: String,
     /// Overrides the palette's accent colour.
     #[serde(skip_serializing_if = "Option::is_none")]

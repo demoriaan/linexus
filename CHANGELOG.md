@@ -2,6 +2,16 @@
 
 All notable changes to this project are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `linexusctl render-preview --overlay notification|volume|track` draws the pop-ups the strip shows over a page, in the language of `--locale`.
+
+### Fixed
+
+- `linexusctl render-preview` offers the Streaming template, and countdown and stopwatch widgets of a config page show running sample times instead of the pomodoro's.
+
 ## [1.3.0] - 2026-10-22
 
 ### Added

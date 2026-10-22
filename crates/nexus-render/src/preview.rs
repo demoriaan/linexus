@@ -153,7 +153,7 @@ pub fn sample_live(locale: Locale) -> LiveData {
         rows: vec![
             NewsRow {
                 source: "Linexus".into(),
-                headline: "Version 1.0 brings app-aware profiles to the strip".into(),
+                headline: "Tap a headline to open it, hold it to hide it".into(),
                 seen: false,
             },
             NewsRow {
@@ -165,6 +165,29 @@ pub fn sample_live(locale: Locale) -> LiveData {
         ..NewsInfo::default()
     };
     live
+}
+
+/// A desktop notification as the strip shows it, for documentation
+/// screenshots.
+pub fn sample_notification(locale: Locale) -> Overlay {
+    let (app, title, body) = match locale {
+        Locale::De => (
+            "Kalender",
+            "Teamcall in 10 Minuten",
+            "Wochenplanung mit dem Designteam",
+        ),
+        Locale::En => (
+            "Calendar",
+            "Team call in 10 minutes",
+            "Weekly planning with the design team",
+        ),
+    };
+    Overlay::Notification {
+        app: app.into(),
+        title: title.into(),
+        body: body.into(),
+        icon: None,
+    }
 }
 
 /// Generated gradient "album art" so previews need no image files.

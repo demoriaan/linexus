@@ -121,7 +121,7 @@ enum Command {
         #[command(subcommand)]
         command: pack_cmd::PackCommand,
     },
-    /// Render a page or test pattern to PNG without the device.
+    /// Render a page, pop-up or test pattern to PNG without the device.
     RenderPreview(preview::RenderPreviewArgs),
 }
 
@@ -215,6 +215,22 @@ mod tests {
             parse(&["--page", "p", "--out", "x.png"]).is_err(),
             "--page needs --config"
         );
+        assert!(parse(&["--overlay", "notification", "--out", "x.png"]).is_ok());
+        for other in [["--config", "c.json"], ["--pattern", "rgb-bars"]] {
+            assert!(
+                parse(&[&["--overlay", "volume", "--out", "x.png"][..], &other[..]].concat())
+                    .is_err()
+            );
+        }
+        assert!(parse(&[
+            "--overlay",
+            "track",
+            "--template",
+            "media",
+            "--out",
+            "x.png"
+        ])
+        .is_err());
         assert!(parse(&["--theme", "plaid", "--out", "x.png"]).is_err());
         assert!(parse(&["--pattern", "rgb-bars", "--scale", "0", "--out", "x.png"]).is_err());
     }

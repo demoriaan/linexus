@@ -233,28 +233,30 @@ Some paths are not flags. To keep test runs apart from your own data, set these 
 
 ## Render previews
 
-`linexusctl render-preview` draws a page or a test pattern to a PNG without the strip or the daemon:
+`linexusctl render-preview` draws a page, a pop-up or a test pattern to a PNG without the strip or the daemon:
 
 ```bash
 linexusctl render-preview --out overview.png
 linexusctl render-preview --template media --theme ember --scale 2 --out media.png
 linexusctl render-preview --config ~/.config/linexus/config.json --page launcher --out launcher.png
 linexusctl render-preview --pattern border-grid --out grid.png
+linexusctl render-preview --overlay notification --scale 2 --out notification.png
 ```
 
 | Option | Effect |
 |---|---|
-| `--template <NAME>` | Built-in page template: `overview` (default), `performance`, `media`, `launcher`, `news`, `focus`, `home`, `blank` |
+| `--template <NAME>` | Built-in page template: `overview` (default), `performance`, `media`, `launcher`, `news`, `focus`, `home`, `streaming`, `blank` |
 | `--config <FILE>` | Render a page from a config file instead of a template |
 | `--profile <ID>` | Profile in `--config`; the active profile by default |
 | `--page <ID>` | Page in `--config`; the profile's first visible page by default |
 | `--pattern <NAME>` | Test pattern instead of a page: `rgb-bars` or `border-grid` |
+| `--overlay <NAME>` | Pop-up instead of a page: `notification`, `volume` or `track` |
 | `--theme <NAME>` | `midnight`, `aurora`, `ember`, `neon`, `mono` or `daylight` |
 | `--locale <LANG>` | `en` or `de` |
 | `--scale <N>` | Enlarge by an integer factor (nearest neighbour) |
 | `--out <FILE>` | Output PNG (required) |
 
-To capture what a running daemon shows, use `linexusctl daemon frame --out strip.png` instead.
+Pages from a config get sample readings for their own timers, weather places and Home Assistant entities; a countdown or stopwatch is shown running. To capture what a running daemon shows, use `linexusctl daemon frame --out strip.png` instead.
 
 ## Tests and lints
 
