@@ -48,6 +48,11 @@ pub(crate) struct Engine {
     focus: crate::focus::Focus,
     /// Profile to return to when the app that switched profiles loses focus.
     auto_return_profile: Option<String>,
+    /// A touch calibration in progress: the strip shows its marks and the
+    /// panel's touches go to it instead of the widgets.
+    calibration: Option<crate::calibration::Calibration>,
+    /// How the last calibration ended, for Studio.
+    calibration_ended: nexus_ipc::CalibrationStatus,
     logger: nexus_events::EventLogger,
     state_path: Option<PathBuf>,
     /// Actions of a sequence waiting for their delay: (due, sequence,
@@ -97,6 +102,8 @@ impl Engine {
             obs: parts.obs,
             focus: parts.focus,
             auto_return_profile: None,
+            calibration: None,
+            calibration_ended: nexus_ipc::CalibrationStatus::default(),
             logger: parts.logger,
             state_path: parts.state_path,
             scheduled: Vec::new(),
@@ -676,6 +683,15 @@ impl Engine {
     /// Housekeeping between frames: scheduled actions, timers, overlays for
     /// external events, auto-return, provider wishes.
     pub(crate) fn tick(&mut self, now: Instant) {
+        if let Some(calibration) = self.calibration.as_ref().filter(|c| c.timed_out(now)) {
+            let state = if calibration.missed() {
+                nexus_ipc::CalibrationState::Failed
+            } else {
+                nexus_ipc::CalibrationState::Cancelled
+            };
+            self.calibration = None;
+            self.calibration_ended = crate::calibration::ended(state, None);
+        }
         if !self.runtime.blanked() && self.runtime.idle_off_due(now) {
             self.runtime.touch_wake_blank = true;
         }
@@ -863,6 +879,17 @@ impl Engine {
     // ---- frames ----------------------------------------------------------
 
     pub(crate) fn frame(&mut self, now: Instant) -> Canvas {
+        if let Some(calibration) = &self.calibration {
+            let canvas = nexus_render::calibration_frame(
+                &self.runtime.profile().theme,
+                self.locale(),
+                calibration.mark(),
+                calibration.step(),
+                crate::calibration::Calibration::steps(),
+            );
+            self.last_frame = Some(canvas.rgba().to_vec());
+            return canvas;
+        }
         let snapshot = self.metrics.latest();
         self.live.absorb(&snapshot);
         let settings = self.runtime.settings().clone();
@@ -906,6 +933,9 @@ impl Engine {
 
     /// When the next frame is due after one rendered at `now`.
     pub(crate) fn next_frame_in(&mut self, now: Instant) -> Duration {
+        if self.calibration.is_some() {
+            return Duration::from_millis(100);
+        }
         if self.runtime.blanked() {
             return Duration::from_millis(250);
         }
@@ -943,6 +973,79 @@ impl Engine {
             );
         }
         interval
+    }
+
+    // ---- touch calibration -----------------------------------------------
+
+    /// A touch from the strip's own panel, at the X the panel reports.
+    /// Studio's mirror and the emulator send exact positions and go straight
+    /// to `touch_event`.
+    pub(crate) fn panel_touch(&mut self, phase: nexus_ipc::TouchPhase, raw_x: u16, now: Instant) {
+        if self.calibration.is_some() {
+            self.calibration_touch(phase, raw_x, now);
+        } else {
+            let x = self.runtime.settings().touch.apply(raw_x);
+            self.touch_event(phase, x, now);
+        }
+    }
+
+    /// Starts, reports on or cancels a calibration; true when the strip
+    /// changes.
+    fn calibrate(&mut self, action: nexus_ipc::CalibrateAction, now: Instant) -> bool {
+        use nexus_ipc::{CalibrateAction, CalibrationState};
+        match action {
+            CalibrateAction::Start => {
+                self.cancel_touch(now);
+                // The marks must show, whatever the strip was doing.
+                self.runtime.manual_blank = false;
+                self.runtime.touch_wake_blank = false;
+                self.runtime.last_touch = now;
+                self.calibration = Some(crate::calibration::Calibration::new(now));
+                true
+            }
+            CalibrateAction::Status => false,
+            CalibrateAction::Cancel => {
+                let running = self.calibration.take().is_some();
+                if running {
+                    self.calibration_ended =
+                        crate::calibration::ended(CalibrationState::Cancelled, None);
+                }
+                running
+            }
+        }
+    }
+
+    fn calibration_status(&self) -> nexus_ipc::CalibrationStatus {
+        self.calibration
+            .as_ref()
+            .map_or_else(|| self.calibration_ended.clone(), |c| c.status())
+    }
+
+    /// A touch on the panel during calibration, at the panel's own X.
+    fn calibration_touch(&mut self, phase: nexus_ipc::TouchPhase, raw_x: u16, now: Instant) {
+        use nexus_ipc::CalibrationState;
+        let Some(calibration) = self.calibration.as_mut() else {
+            return;
+        };
+        self.runtime.last_touch = now;
+        calibration.touch(phase, raw_x, now);
+        if calibration.mark().is_none() {
+            let result = calibration.result();
+            let state = if result.is_some() {
+                CalibrationState::Done
+            } else {
+                CalibrationState::Failed
+            };
+            self.calibration = None;
+            self.calibration_ended = crate::calibration::ended(state, result);
+            log_fields(
+                &self.logger,
+                Level::Info,
+                "touch_calibrated",
+                "touch calibration finished",
+                [("result", format!("{result:?}"))],
+            );
+        }
     }
 
     // ---- API -------------------------------------------------------------
@@ -1016,6 +1119,14 @@ impl Engine {
                     ),
                 }
             }
+            C::Tap { x } if self.calibration.is_some() => {
+                if self.mode == nexus_ipc::DaemonMode::Emulator {
+                    let x = x.min(639);
+                    self.calibration_touch(nexus_ipc::TouchPhase::Began, x, now);
+                    self.calibration_touch(nexus_ipc::TouchPhase::Ended, x, now);
+                }
+                (self.ok("tap handled"), true)
+            }
             C::Tap { x } => {
                 self.touch_event(nexus_ipc::TouchPhase::Began, x, now);
                 self.touch_event(
@@ -1025,9 +1136,29 @@ impl Engine {
                 );
                 (self.ok("tap handled"), true)
             }
+            // Studio's mirror sends exact positions: they would spoil a
+            // calibration of the panel. The emulator has only those.
+            C::Touch { phase, x } if self.calibration.is_some() => {
+                if self.mode == nexus_ipc::DaemonMode::Emulator {
+                    self.calibration_touch(phase, x.min(639), now);
+                }
+                (nexus_ipc::Response::ok("touch"), true)
+            }
             C::Touch { phase, x } => {
                 self.touch_event(phase, x.min(639), now);
                 (nexus_ipc::Response::ok("touch"), true)
+            }
+            C::Calibrate { action } => {
+                let changed = self.calibrate(action, now);
+                (
+                    nexus_ipc::Response {
+                        ok: true,
+                        message: "calibration".into(),
+                        calibration: Some(self.calibration_status()),
+                        ..nexus_ipc::Response::default()
+                    },
+                    changed,
+                )
             }
             C::PageNext | C::PagePrevious => {
                 let direction = if matches!(command, C::PageNext) {

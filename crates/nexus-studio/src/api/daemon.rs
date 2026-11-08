@@ -36,6 +36,7 @@ fn command(state: &AppState, operation: &str, body: &[u8]) -> Option<Response> {
         "blank" => daemon_reply(state, Command::Blank),
         "restore" => daemon_reply(state, Command::Restore),
         "notify" => notify(state, body),
+        "calibrate" => calibrate(state, body),
         "start" | "restart" | "stop" => service(state, operation),
         "autostart" => autostart(state, body),
         _ => return None,
@@ -86,6 +87,25 @@ fn touch(state: &AppState, body: &[u8]) -> Response {
             Command::Touch {
                 phase: request.phase,
                 x,
+            },
+        ),
+        Err(response) => response,
+    }
+}
+
+#[derive(Deserialize)]
+struct CalibrateRequest {
+    action: nexus_ipc::CalibrateAction,
+}
+
+/// Touch calibration: `start`, `status` or `cancel`; the state comes back
+/// under `daemon.calibration`.
+fn calibrate(state: &AppState, body: &[u8]) -> Response {
+    match parse_json::<CalibrateRequest>(body, "calibration") {
+        Ok(request) => daemon_reply(
+            state,
+            Command::Calibrate {
+                action: request.action,
             },
         ),
         Err(response) => response,
@@ -287,7 +307,7 @@ mod tests {
     #[test]
     fn invalid_input_is_rejected_before_any_ipc() {
         let state = state();
-        let cases: [(&str, &[u8]); 9] = [
+        let cases: [(&str, &[u8]); 10] = [
             ("/api/daemon/brightness", br#"{"percent":101}"#),
             ("/api/daemon/brightness", br#"{"percent":-1}"#),
             ("/api/daemon/tap", br#"{"x":640}"#),
@@ -297,6 +317,7 @@ mod tests {
             ("/api/daemon/page", br#"{"page_id":"a","direction":"next"}"#),
             ("/api/daemon/profile", br#"{"profile_id":" "}"#),
             ("/api/daemon/notify", br#"{"text":""}"#),
+            ("/api/daemon/calibrate", br#"{"action":"explode"}"#),
         ];
         for (path, body) in cases {
             let response = handle(&post(path, body), &state);

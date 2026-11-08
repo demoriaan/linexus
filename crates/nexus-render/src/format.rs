@@ -147,6 +147,7 @@ pub enum Word {
     Round,
     Down,
     Up,
+    TouchTheMark,
 }
 
 pub fn word(word: Word, locale: Locale) -> &'static str {
@@ -194,6 +195,8 @@ pub fn word(word: Word, locale: Locale) -> &'static str {
         (Locale::De, Down) => "Runter",
         (Locale::En, Up) => "Up",
         (Locale::De, Up) => "Hoch",
+        (Locale::En, TouchTheMark) => "Touch the center of the mark",
+        (Locale::De, TouchTheMark) => "Tippe auf die Mitte der Markierung",
     }
 }
 

@@ -208,7 +208,7 @@ fn drive(
                     nexus_core::TouchPhase::Moved => nexus_ipc::TouchPhase::Moved,
                     nexus_core::TouchPhase::Ended => nexus_ipc::TouchPhase::Ended,
                 };
-                engine.touch_event(phase, event.x, Instant::now());
+                engine.panel_touch(phase, event.x, Instant::now());
                 // Answer the finger within one frame.
                 next_frame = next_frame.min(Instant::now() + Duration::from_millis(8));
             }

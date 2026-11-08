@@ -6,6 +6,8 @@ All notable changes to this project are listed here. The format follows [Keep a 
 
 ### Added
 
+- Touch correction (`settings.touch`, Studio → Device): moves the strip's touches by a number of pixels at its left and right edges, for panels that read touches beside the finger. Calibrate fills it in: the strip shows marks to touch one after the other, and Studio shows the measured correction to apply.
+- Touch correction for strips that read touches beside the finger: `settings.touch` shifts the panel's touches by a number of pixels at each edge. Studio measures it under Device → Calibrate: the strip shows five marks twice, a touch far from its mark does not count, and a result inside normal finger accuracy counts as no correction. Corrections are applied only when you click Apply.
 - `linexusctl render-preview --overlay notification|volume|track` draws the pop-ups the strip shows over a page, in the language of `--locale`.
 
 ### Fixed

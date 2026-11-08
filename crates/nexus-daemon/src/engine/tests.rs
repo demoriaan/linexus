@@ -440,3 +440,92 @@ fn dragging_off_the_left_end_of_the_slider_still_commits() {
     assert!(engine.own_volume_until > lifted);
     assert!(!engine.scene.sliding());
 }
+
+/// Calibration takes over the strip: its touches measure the panel instead
+/// of reaching widgets, and Studio reads the result.
+#[test]
+fn calibration_measures_the_panel_and_reports_it() {
+    use nexus_ipc::{CalibrateAction, CalibrationState};
+    let scratch = Scratch::new("calibration");
+    let mut engine = engine(
+        Runtime::from_config(nexus_config::default_config(), None),
+        &scratch,
+    );
+    let t = Instant::now();
+    let calibrate = |engine: &mut Engine, action| {
+        let (response, _) = engine.handle_request(Command::Calibrate { action }, t);
+        response.calibration.unwrap()
+    };
+    assert_eq!(
+        calibrate(&mut engine, CalibrateAction::Status).state,
+        CalibrationState::Idle
+    );
+    let started = calibrate(&mut engine, CalibrateAction::Start);
+    assert_eq!(
+        (started.state, started.step),
+        (CalibrationState::Running, 0)
+    );
+    assert!(engine.calibration.is_some());
+    // A panel that reads every touch 20 px to the left.
+    for n in 0..started.steps {
+        let mark = crate::calibration::MARKS[n % crate::calibration::MARKS.len()];
+        engine.panel_touch(TouchPhase::Began, mark - 20, t);
+        engine.panel_touch(TouchPhase::Ended, mark - 20, t);
+    }
+    assert!(engine.calibration.is_none());
+    let done = calibrate(&mut engine, CalibrateAction::Status);
+    assert_eq!(done.state, CalibrationState::Done);
+    assert_eq!((done.left, done.right), (Some(20), Some(20)));
+
+    calibrate(&mut engine, CalibrateAction::Start);
+    engine.tick(t + Duration::from_secs(31));
+    assert_eq!(
+        calibrate(&mut engine, CalibrateAction::Status).state,
+        CalibrationState::Cancelled
+    );
+}
+
+/// The panel's touches are corrected on the way in; the strip's own X goes to
+/// a calibration unchanged, and taps from Studio do not spoil one.
+#[test]
+fn panel_touches_are_corrected_except_during_calibration() {
+    use nexus_ipc::CalibrateAction;
+    let scratch = Scratch::new("panel-touch");
+    let mut config = nexus_config::default_config();
+    config.settings.touch = nexus_config::TouchCorrection {
+        left: 20,
+        right: 20,
+    };
+    let right = Widget::new(
+        "right",
+        200,
+        200,
+        WidgetKind::Button(ButtonProps::default()),
+    )
+    .with_tap(set(90));
+    config.profiles[0].pages = vec![page("a", vec![button("left", set(10)), right])];
+    let mut engine = engine(Runtime::from_config(config, None), &scratch);
+    let t = Instant::now();
+    // 190 is on the left button, 190 + 20 on the right one.
+    engine.panel_touch(TouchPhase::Began, 190, t);
+    engine.panel_touch(TouchPhase::Ended, 190, t + ms(40));
+    engine.tick(t + ms(1_000));
+    assert_eq!(engine.runtime.brightness, 90);
+
+    let (response, _) = engine.handle_request(
+        Command::Calibrate {
+            action: CalibrateAction::Start,
+        },
+        t + ms(2_000),
+    );
+    assert!(response.ok);
+    let mark = crate::calibration::MARKS[0];
+    engine.panel_touch(TouchPhase::Began, mark, t + ms(2_100));
+    engine.panel_touch(TouchPhase::Ended, mark, t + ms(2_140));
+    assert_eq!(engine.calibration.as_ref().unwrap().step(), 1);
+    // The real strip's mode: Studio's exact taps do not count.
+    engine.mode = nexus_ipc::DaemonMode::Hardware;
+    engine.handle_request(Command::Tap { x: 180 }, t + ms(2_200));
+    assert_eq!(engine.calibration.as_ref().unwrap().step(), 1);
+    assert_eq!(engine.runtime.brightness, 90);
+}

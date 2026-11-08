@@ -643,3 +643,38 @@ fn obs_actions_name_their_scene_or_source() {
     });
     validate(&config).unwrap();
 }
+
+#[test]
+fn touch_correction_shifts_reported_touches() {
+    let none = TouchCorrection::default();
+    assert_eq!(none.apply(300), 300);
+    let measured = TouchCorrection {
+        left: 28,
+        right: 11,
+    };
+    assert_eq!(measured.apply(0), 28);
+    assert_eq!(measured.apply(639), 639);
+    assert_eq!(measured.apply(277), 298);
+    let fixed = TouchCorrection {
+        left: -20,
+        right: -20,
+    };
+    assert_eq!(fixed.apply(10), 0);
+    assert_eq!(fixed.apply(300), 280);
+
+    let mut config = default_config();
+    config.settings.touch = measured;
+    validate(&config).unwrap();
+    let json = serde_json::to_value(&config.settings).unwrap();
+    assert_eq!(
+        json["touch"],
+        serde_json::json!({ "left": 28, "right": 11 })
+    );
+    for bad in [101, -101, i16::MIN] {
+        config.settings.touch.right = bad;
+        assert!(matches!(
+            validate(&config),
+            Err(ConfigError::InvalidTouchCorrection { .. })
+        ));
+    }
+}

@@ -37,6 +37,7 @@ pub struct Settings {
     pub weather: Option<GeoLocation>,
     pub notifications: NotificationSettings,
     pub overlays: OverlaySettings,
+    pub touch: TouchCorrection,
 }
 
 impl Default for Settings {
@@ -50,6 +51,7 @@ impl Default for Settings {
             weather: None,
             notifications: NotificationSettings::default(),
             overlays: OverlaySettings::default(),
+            touch: TouchCorrection::default(),
         }
     }
 }
@@ -146,6 +148,38 @@ impl Default for OverlaySettings {
             volume: true,
             now_playing: true,
         }
+    }
+}
+
+/// How far the touch panel reports touches from where the finger is, in
+/// pixels: added to every X the strip reports, `left` at its left edge,
+/// `right` at its right edge, and in between in proportion. Positive values
+/// move touches to the right.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct TouchCorrection {
+    pub left: i16,
+    pub right: i16,
+}
+
+/// Largest correction the validator accepts at either edge.
+pub const MAX_TOUCH_CORRECTION: i16 = 100;
+
+impl TouchCorrection {
+    pub fn is_zero(&self) -> bool {
+        self.left == 0 && self.right == 0
+    }
+
+    /// Where a touch the panel reports at `x` really is.
+    pub fn apply(&self, x: u16) -> u16 {
+        if self.is_zero() {
+            return x;
+        }
+        let at = f32::from(x) / f32::from(STRIP_WIDTH - 1);
+        let shift = f32::from(self.left) + (f32::from(self.right) - f32::from(self.left)) * at;
+        (f32::from(x) + shift)
+            .round()
+            .clamp(0.0, f32::from(STRIP_WIDTH - 1)) as u16
     }
 }
 

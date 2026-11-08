@@ -62,6 +62,7 @@ The request object has one field, `command`, which holds the command object. The
 | `frame` | none | Returns the frame currently on the strip | `frame` |
 | `notify` | `text`, `icon` (optional) | Shows a message over the current page for 5 seconds. `icon` is a Lucide icon name such as `bell` or `check`; unknown names show `bell`. | `message` only |
 | `metrics` | none | Current value of every metric | `metrics` |
+| `calibrate` | `action` (`start`, `status`, `cancel`) | Touch calibration: `start` shows marks on the strip to touch one after the other; the panel's touches measure it instead of reaching widgets (touches sent with `touch` do not count, except in the emulator). See [configuration.md](configuration.md#settings). | `calibration` |
 
 Examples:
 
@@ -85,6 +86,7 @@ Examples:
 | `status` | object | After `status` and the commands marked above, when they succeed |
 | `frame` | string | After `frame`: the current frame as a base64-encoded PNG, 640 x 48 pixels |
 | `metrics` | array | After `metrics` |
+| `calibration` | object | After `calibrate` |
 
 `status`:
 
@@ -126,6 +128,14 @@ Examples:
 ```
 
 `unit` is one of `percent`, `celsius`, `watts`, `rpm`, `bytes`, `bytes_per_sec`, `megahertz` or `plain`. `max` is the full scale used for bars and rings. The ids are listed in [configuration.md](configuration.md#metric-ids).
+
+`calibration`:
+
+```json
+{ "state": "done", "step": 10, "steps": 10, "left": 28, "right": 11 }
+```
+
+`state` is `idle` (none since the daemon started), `running`, `done`, `cancelled` (cancelled, or 30 seconds without a touch) or `failed` (the touches were too far from the marks or did not fit a line). Values under 10 px at both edges come back as 0. `step` counts the marks touched; `left` and `right`, once `done`, are the measured correction for `settings.touch`. The daemon does not store it; Studio does when you apply it.
 
 Errors come back with `ok: false`:
 

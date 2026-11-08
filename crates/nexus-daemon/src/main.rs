@@ -1,3 +1,4 @@
+mod calibration;
 mod dispatch;
 mod engine;
 mod focus;

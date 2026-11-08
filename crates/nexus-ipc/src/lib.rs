@@ -53,6 +53,48 @@ pub enum Command {
     },
     /// Current readings of every metric, in `Response::metrics`.
     Metrics,
+    /// Touch calibration: the strip shows marks to touch one after the
+    /// other and measures where the panel reads each touch. The state comes
+    /// back in `Response::calibration`.
+    Calibrate {
+        action: CalibrateAction,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CalibrateAction {
+    Start,
+    Status,
+    Cancel,
+}
+
+/// Where a touch calibration stands.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct CalibrationStatus {
+    pub state: CalibrationState,
+    /// Marks touched so far, and how many there are.
+    pub step: usize,
+    pub steps: usize,
+    /// The measured correction at the strip's edges, once `done`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left: Option<i16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right: Option<i16>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CalibrationState {
+    /// None started since the daemon started.
+    #[default]
+    Idle,
+    Running,
+    Done,
+    /// Cancelled, or nobody touched the strip for a while.
+    Cancelled,
+    /// The touches were too far apart to tell a correction.
+    Failed,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -86,6 +128,8 @@ pub struct Response {
     pub frame: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics: Option<Vec<MetricReading>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calibration: Option<CalibrationStatus>,
 }
 
 impl Response {

@@ -112,8 +112,63 @@ function Behaviour() {
           <input type="range" min="0" max="120" step="5" value=${idle.off_after_minutes ?? 0} onInput=${(e) => setIdle({ off_after_minutes: Number(e.currentTarget.value) }, "off")} />
         <//>
         <div class="field inline"><span>${t("behaviour.lock")}</span><${Switch} ariaLabel=${t("behaviour.lock")} checked=${idle.blank_when_locked} onChange=${(blank_when_locked) => setIdle({ blank_when_locked })} /></div>
+        <${TouchCorrection} />
       </div>
     </section>`;
+}
+
+/**
+ * How far the panel reads touches from the finger: measured by the
+ * calibration (marks on the strip to touch one after the other) or set by
+ * hand. The daemon applies it to the strip's own touches only.
+ */
+function TouchCorrection() {
+  const touch = { left: 0, right: 0, ...config.value.settings.touch };
+  const set = (patch, coalesce) => edit((d) => { d.settings.touch = { ...touch, ...d.settings.touch, ...patch }; }, { coalesce });
+  const [calibration, setCalibration] = useState(null);
+  const call = async (action) => {
+    const data = await api.post("/api/daemon/calibrate", { action });
+    setCalibration(data.daemon?.calibration ?? null);
+  };
+  const running = calibration?.state === "running";
+  // Follow the strip while marks are being touched.
+  useEffect(() => {
+    if (!running) return undefined;
+    const timer = setInterval(() => call("status").catch(() => setCalibration(null)), 400);
+    return () => clearInterval(timer);
+  }, [running]);
+  // Leaving the page ends a calibration nobody watches any more.
+  useEffect(() => () => { api.post("/api/daemon/calibrate", { action: "cancel" }).catch(() => {}); }, []);
+  const start = () => call("start").catch((e) => toast(e.message, "error"));
+  const signed = (n) => (n > 0 ? `+${n}` : `${n}`);
+  const slider = (key) => html`
+    <${Field} label=${t(`touch.${key}`, { n: touch[key] > 0 ? `+${touch[key]}` : touch[key] })}>
+      <input type="range" min="-100" max="100" step="1" value=${touch[key]} onInput=${(e) => set({ [key]: Number(e.currentTarget.value) }, `touch-${key}`)} />
+    <//>`;
+  const done = calibration?.state === "done";
+  const exact = done && calibration.left === 0 && calibration.right === 0;
+  return html`
+    <hr class="divider" />
+    <div class="field"><span>${t("touch.title")}</span><small>${t("touch.hint")}</small></div>
+    <div class="row">
+      ${running
+        ? html`<span class="hint">${t("touch.calibrating", { n: Math.min(calibration.step + 1, calibration.steps), total: calibration.steps })}</span>
+            <button class="btn small ghost" onClick=${() => call("cancel").catch(() => setCalibration(null))}>${t("common.cancel")}</button>`
+        : html`<button class="btn small primary" onClick=${start}><${Icon} name="crosshair" size=${14} />${t("touch.calibrate")}</button>`}
+    </div>
+    ${done && html`
+      <div class="row">
+        <span class="ok-text">${exact
+          ? t("touch.accurate")
+          : t("touch.measured", { left: signed(calibration.left), right: signed(calibration.right) })}</span>
+        ${(calibration.left !== touch.left || calibration.right !== touch.right) && html`
+          <button class="btn small primary" onClick=${() => { set({ left: calibration.left, right: calibration.right }); setCalibration(null); toast(t("touch.applied"), "ok"); }}>${t("touch.apply")}</button>`}
+        <button class="btn small ghost" onClick=${() => setCalibration(null)}>${t("touch.discard")}</button>
+      </div>`}
+    ${calibration?.state === "failed" && html`<span class="bad-text">${t("touch.failed")}</span>`}
+    ${calibration?.state === "cancelled" && html`<span class="hint">${t("touch.cancelled")}</span>`}
+    <div class="two">${slider("left")}${slider("right")}</div>
+    ${(touch.left || touch.right) ? html`<div><button class="btn small ghost" onClick=${() => set({ left: 0, right: 0 })}>${t("touch.reset")}</button></div>` : null}`;
 }
 
 /** A check's text in the UI language, or the daemon's English one. */

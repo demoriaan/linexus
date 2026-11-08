@@ -155,6 +155,57 @@ pub fn draw_page_indicator(canvas: &mut Canvas, ui: &UiState, palette: &Palette)
     }
 }
 
+/// The touch calibration screen: a mark to touch at `mark` (strip X) with
+/// its number, and what to do on the other side of the strip. Without a
+/// mark (all touched) only the progress shows.
+pub fn calibration_frame(
+    theme: &Theme,
+    locale: Locale,
+    mark: Option<u16>,
+    step: usize,
+    steps: usize,
+) -> Canvas {
+    let palette = Palette::for_theme(theme);
+    let mut canvas = Canvas::new();
+    canvas.vertical_gradient(Bounds::strip(), palette.bg_top, palette.bg_bottom);
+    let progress = Bounds::new(0.0, HEIGHT as f32 - 3.0, WIDTH as f32, 3.0);
+    canvas.fill(progress, palette.track, 1.0);
+    canvas.fill(
+        Bounds::new(
+            0.0,
+            progress.y,
+            progress.w * step as f32 / steps.max(1) as f32,
+            3.0,
+        ),
+        palette.accent,
+        1.0,
+    );
+    let Some(mark) = mark else {
+        return canvas;
+    };
+    let x = f32::from(mark);
+    // A thin line through the whole height, and a ring around its middle.
+    canvas.fill(
+        Bounds::new(x - 0.5, 0.0, 1.0, HEIGHT as f32 - 3.0),
+        palette.accent,
+        0.9,
+    );
+    canvas.circle(x, 22.0, 15.0, palette.accent, 0.25);
+    canvas.circle(x, 22.0, 3.0, palette.accent, 1.0);
+    let style = TextStyle::new(FontFace::SemiBold, 15.0, palette.text);
+    let count = TextStyle::new(FontFace::Medium, 12.0, palette.text_dim).tabular();
+    let hint = format::word(format::Word::TouchTheMark, locale);
+    let counter = format!("{} / {steps}", step + 1);
+    if x < WIDTH as f32 / 2.0 {
+        canvas.text(x + 30.0, 22.0, hint, &style);
+        canvas.text(x + 30.0, 38.0, &counter, &count);
+    } else {
+        canvas.text_right(x - 30.0, 22.0, hint, &style);
+        canvas.text_right(x - 30.0, 38.0, &counter, &count);
+    }
+    canvas
+}
+
 /// Draws a transient overlay. `visibility` (0..=1) drives a slide-in from
 /// the top edge.
 pub fn draw_overlay(

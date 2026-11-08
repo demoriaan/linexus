@@ -75,6 +75,7 @@ All fields are optional.
 | `weather` | location or `null` | `null` | Default place for weather widgets: `{"name": "Berlin", "latitude": 52.52, "longitude": 13.405}` |
 | `notifications` | object | see below | Desktop notifications on the strip |
 | `overlays` | object | see below | Short pop-ups for volume and track changes |
+| `touch` | object | see below | Correction for a touch panel that reads touches beside the finger |
 
 `idle`:
 
@@ -111,6 +112,17 @@ Notification text is cut to 1024 characters. A picture sent inline with more tha
 |---|---|---|---|
 | `volume` | boolean | `true` | Show a volume bar when the system volume changes, unless the page already has a volume widget |
 | `now_playing` | boolean | `true` | Show the new track when the playing track changes, unless the page already has a media widget |
+
+`touch`:
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `left` | number | `0` | Pixels added to touches at the left edge of the strip; positive moves them to the right |
+| `right` | number | `0` | The same at the right edge; in between the correction changes in proportion |
+
+Both stay within ±100. The daemon corrects the strip's own touches only; taps from Studio's mirror and the emulator are exact.
+
+Studio → Device → Calibrate measures it: the strip shows five marks across its width, twice, one after the other, and you touch the center of each. A touch more than 70 px from its mark does not count and the mark stays. A line fitted through the ten touches gives both values, which Studio shows to apply or discard; values under 10 px at both edges are within normal finger accuracy and count as no correction. A calibration fails when one touch lies more than 30 px off the fitted line, when the touches stretch the strip by more than 25 %, or when the marks are missed for 30 seconds; with no touch for 30 seconds it is cancelled. By hand, `linexusctl touch` prints what the panel reports while `linexusctl demo --pattern border-grid` shows lines every 100 px (stop the daemon first).
 
 ## Profiles
 
