@@ -96,7 +96,8 @@ The strip sends input reports with ID `0x01`. The implementation reads at most 6
 | 6, 7 | X position, little-endian, 0 to 639 |
 
 - Reports shorter than 8 bytes, or with other values in bytes 0 to 2, are ignored.
-- An X value of 640 or more is not used as a position. If such a report lifts the finger, the touch ends at the last position on the panel; a touch whose first reports are off the panel starts with its first valid one.
+- The report that lifts the finger carries no position: the strip sends X = 0 there. The touch ends at the last position seen while the finger was down.
+- An X value of 640 or more is not used as a position; a touch whose first reports are off the panel starts with its first valid one.
 - There is no Y position in what this implementation reads, so widgets cover the full strip height and gestures are horizontal only.
 - The implementation tracks a single contact. The touch phase follows from the contact byte of two consecutive reports: 0 then non-zero starts a touch, non-zero then non-zero moves it, non-zero then 0 ends it.
 

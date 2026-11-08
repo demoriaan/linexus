@@ -123,6 +123,11 @@ impl Scene {
         self.slide = widget;
     }
 
+    #[cfg(test)]
+    pub(crate) fn sliding(&self) -> bool {
+        self.slide.is_some()
+    }
+
     pub(crate) fn show_overlay(&mut self, overlay: Overlay, duration: Duration, now: Instant) {
         // A newer volume or track overlay replaces one of the same kind in
         // place instead of queueing behind it.

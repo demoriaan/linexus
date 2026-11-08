@@ -339,3 +339,104 @@ fn track_overlay_shows_the_new_track() {
         other => panic!("expected the track overlay, got {other:?}"),
     }
 }
+
+/// Feed raw strip reports through the parser into the engine, the way
+/// `hardware.rs` does. Each report is `(contact, x)`, 40 ms apart.
+fn feed_reports(engine: &mut Engine, reports: &[(u8, u16)], start: Instant) -> Instant {
+    let mut parser = nexus_core::TouchParser::default();
+    let mut now = start;
+    for &(contact, x) in reports {
+        now += ms(40);
+        let [low, high] = x.to_le_bytes();
+        let report = [0x01, 0x02, 0x21, 0, 0, contact, low, high];
+        if let Some(event) = parser.parse_report(&report) {
+            let phase = match event.phase {
+                nexus_core::TouchPhase::Began => TouchPhase::Began,
+                nexus_core::TouchPhase::Moved => TouchPhase::Moved,
+                nexus_core::TouchPhase::Ended => TouchPhase::Ended,
+            };
+            engine.touch_event(phase, event.x, now);
+        }
+    }
+    now
+}
+
+fn pages_abc() -> nexus_config::NexusConfig {
+    let mut config = nexus_config::default_config();
+    config.profiles[0].pages = vec![
+        page("a", Vec::new()),
+        page("b", Vec::new()),
+        page("c", Vec::new()),
+    ];
+    config
+}
+
+/// The strip says X = 0 in the report that lifts the finger.
+#[test]
+fn a_rightward_swipe_on_the_strip_goes_to_the_previous_page() {
+    let scratch = Scratch::new("swipe-back");
+    let mut engine = engine(Runtime::from_config(pages_abc(), None), &scratch);
+    let t = Instant::now();
+    go_to(&mut engine, "b", t);
+    feed_reports(
+        &mut engine,
+        &[(1, 300), (1, 420), (1, 500), (0, 0)],
+        t + ms(2_000),
+    );
+    assert_eq!(engine.runtime.page().id, "a");
+}
+
+#[test]
+fn a_leftward_swipe_on_the_strip_goes_to_the_next_page() {
+    let scratch = Scratch::new("swipe-forward");
+    let mut engine = engine(Runtime::from_config(pages_abc(), None), &scratch);
+    let t = Instant::now();
+    go_to(&mut engine, "b", t);
+    feed_reports(
+        &mut engine,
+        &[(1, 500), (1, 420), (1, 300), (0, 0)],
+        t + ms(2_000),
+    );
+    assert_eq!(engine.runtime.page().id, "c");
+}
+
+fn volume_page() -> nexus_config::NexusConfig {
+    let mut config = nexus_config::default_config();
+    let slider = Widget::new(
+        "volume",
+        0,
+        640,
+        WidgetKind::Volume(nexus_config::VolumeProps::default()),
+    );
+    config.profiles[0].pages = vec![page("a", vec![slider])];
+    config
+}
+
+#[test]
+fn dragging_the_volume_slider_on_the_strip_commits_on_lift() {
+    let scratch = Scratch::new("slider-drag");
+    let mut engine = engine(Runtime::from_config(volume_page(), None), &scratch);
+    let t = Instant::now();
+    let lifted = feed_reports(
+        &mut engine,
+        &[(1, 200), (1, 300), (1, 400), (0, 0)],
+        t + ms(2_000),
+    );
+    // Only a committed drag holds back the volume pop-up.
+    assert!(engine.own_volume_until > lifted);
+    assert!(!engine.scene.sliding());
+}
+
+#[test]
+fn dragging_off_the_left_end_of_the_slider_still_commits() {
+    let scratch = Scratch::new("slider-off-end");
+    let mut engine = engine(Runtime::from_config(volume_page(), None), &scratch);
+    let t = Instant::now();
+    let lifted = feed_reports(
+        &mut engine,
+        &[(1, 200), (1, 100), (1, 10), (0, 0)],
+        t + ms(2_000),
+    );
+    assert!(engine.own_volume_until > lifted);
+    assert!(!engine.scene.sliding());
+}

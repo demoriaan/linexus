@@ -10,6 +10,8 @@ All notable changes to this project are listed here. The format follows [Keep a 
 
 ### Fixed
 
+- Swiping right on the strip goes back to the previous page. The strip reports X = 0 when the finger lifts, so every swipe used to end at the left edge and turned into "next page".
+- The volume slider on the strip sets the volume when you drag along it. The lift report's X = 0 put the end of every drag left of the slider, so the drag was thrown away.
 - `linexusctl render-preview` offers the Streaming template, and countdown and stopwatch widgets of a config page show running sample times instead of the pomodoro's.
 
 ## [1.3.0] - 2026-10-22

@@ -247,9 +247,10 @@ impl Engine {
                     self.scene.slide(None);
                     return;
                 };
-                let Some(fraction) = nexus_render::volume_fraction_at(widget.x, widget.w, x) else {
-                    return;
-                };
+                // The finger is captured: past the left end of the track is
+                // the bottom of the slider, not a press on the speaker icon.
+                let fraction =
+                    nexus_render::volume_fraction_at(widget.x, widget.w, x).unwrap_or(0.0);
                 if done {
                     self.scene.slide(None);
                     let percent = (fraction * 100.0).round() as u8;
