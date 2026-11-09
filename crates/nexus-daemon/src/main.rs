@@ -1,4 +1,5 @@
 mod calibration;
+mod discord;
 mod dispatch;
 mod engine;
 mod focus;
@@ -128,6 +129,11 @@ fn main() -> Result<()> {
     };
 
     let (feedback_tx, feedback_rx) = mpsc::channel();
+    let discord = if args.once {
+        discord::Discord::off()
+    } else {
+        discord::Discord::on(feedback_tx.clone(), logger.clone(), args.dry_run_actions)
+    };
     let obs = if args.once {
         obs::Obs::off()
     } else {
@@ -152,6 +158,7 @@ fn main() -> Result<()> {
         feedback: feedback_rx,
         notifications,
         obs,
+        discord,
         focus,
         logger: logger.clone(),
         state_path: (!args.once).then_some(state_path),

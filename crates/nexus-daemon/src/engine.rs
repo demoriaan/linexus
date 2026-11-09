@@ -12,8 +12,11 @@ use crate::scene::Scene;
 use crate::timers::{self, Timers};
 use crate::touch::{Interaction, Target, TouchMachine, WidgetRef};
 use base64::Engine as _;
-use nexus_config::{ActionSpec, BrightnessAction, MediaKey, Widget, WidgetKind};
-use nexus_render::{Canvas, MediaZone, Overlay};
+use nexus_config::{
+    ActionSpec, BrightnessAction, DiscordCommand, MediaKey, NotificationScroll, VolumeSource,
+    Widget, WidgetKind,
+};
+use nexus_render::{CallHit, Canvas, MediaZone, Overlay};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
@@ -31,6 +34,20 @@ const TOAST: Duration = Duration::from_millis(2_500);
 const OWN_VOLUME_QUIET: Duration = Duration::from_secs(2);
 /// Shortest time a notification stays, so it can be read.
 const NOTIFICATION_MIN: Duration = Duration::from_millis(1500);
+/// How long a desktop notification from Discord waits for the same message
+/// over RPC, which can arrive just after it.
+const DESKTOP_COPY_HOLD: Duration = Duration::from_millis(600);
+/// A Discord call widget closes someone's controls after this long
+/// without a touch.
+const DISCORD_FOCUS: Duration = Duration::from_secs(8);
+/// Voice widgets turn to their next page of channels this often...
+const ROTATION_EVERY: Duration = Duration::from_secs(5);
+/// ...unless the strip was touched this recently.
+const ROTATION_PAUSE: Duration = Duration::from_secs(10);
+/// The longest a scrolling notification stays up.
+const SCROLL_MAX: Duration = Duration::from_secs(30);
+/// Volume change per tap in the call widget's controls.
+const DISCORD_USER_STEP: u16 = 10;
 
 pub(crate) struct Engine {
     pub(crate) runtime: Runtime,
@@ -45,9 +62,27 @@ pub(crate) struct Engine {
     feedback: Receiver<Feedback>,
     notifications: crate::notifications::Notifications,
     obs: crate::obs::Obs,
+    discord: crate::discord::Discord,
     focus: crate::focus::Focus,
     /// Profile to return to when the app that switched profiles loses focus.
     auto_return_profile: Option<String>,
+    /// Profile to return to when you leave Discord voice.
+    voice_return_profile: Option<String>,
+    /// Whether you sat in a Discord voice channel at the last tick.
+    in_voice: bool,
+    /// The member a Discord call widget shows controls for, and when they
+    /// were last touched.
+    discord_focus: Option<(String, Instant)>,
+    /// A push-to-talk button opened the microphone; it mutes again on
+    /// release.
+    talking: bool,
+    /// Messages Discord sent lately, to recognize their desktop copies.
+    recent_discord: crate::discord::RecentMessages,
+    /// Discord's desktop notifications waiting for the original.
+    held_desktop: Vec<(Instant, crate::notifications::Prepared)>,
+    /// Which page voice widgets show, and when it last turned.
+    voice_rotation: u64,
+    voice_rotated: Instant,
     /// A touch calibration in progress: the strip shows its marks and the
     /// panel's touches go to it instead of the widgets.
     calibration: Option<crate::calibration::Calibration>,
@@ -79,6 +114,7 @@ pub(crate) struct EngineParts {
     pub(crate) feedback: Receiver<Feedback>,
     pub(crate) notifications: crate::notifications::Notifications,
     pub(crate) obs: crate::obs::Obs,
+    pub(crate) discord: crate::discord::Discord,
     pub(crate) focus: crate::focus::Focus,
     pub(crate) logger: nexus_events::EventLogger,
     pub(crate) state_path: Option<PathBuf>,
@@ -100,8 +136,17 @@ impl Engine {
             feedback: parts.feedback,
             notifications: parts.notifications,
             obs: parts.obs,
+            discord: parts.discord,
             focus: parts.focus,
             auto_return_profile: None,
+            voice_return_profile: None,
+            in_voice: false,
+            discord_focus: None,
+            talking: false,
+            recent_discord: crate::discord::RecentMessages::default(),
+            held_desktop: Vec::new(),
+            voice_rotation: 0,
+            voice_rotated: Instant::now(),
             calibration: None,
             calibration_ended: nexus_ipc::CalibrationStatus::default(),
             logger: parts.logger,
@@ -136,7 +181,11 @@ impl Engine {
                 self.waking = true;
                 return;
             }
+            let link = self.scene.overlay_link(now);
             if self.scene.dismiss_overlay(now) {
+                if let Some(link) = link {
+                    self.queue("discord-notification", nexus_actions::Action::OpenUrl(link));
+                }
                 self.waking = true;
                 return;
             }
@@ -207,6 +256,7 @@ impl Engine {
     /// profile or config change it would hit other widgets, and a lost
     /// device never sends the release.
     pub(crate) fn cancel_touch(&mut self, now: Instant) {
+        self.stop_talking();
         self.touch.reset();
         self.waking = false;
         self.news.end_touch();
@@ -227,10 +277,17 @@ impl Engine {
     fn interact(&mut self, interaction: Interaction, now: Instant) {
         match interaction {
             Interaction::Press { widget, .. } => {
-                let id = self.widget(widget).filter(reacts_to_press).map(|w| w.id);
+                let widget = self.widget(widget);
+                if widget.as_ref().is_some_and(is_push_to_talk) {
+                    self.start_talking(now);
+                }
+                let id = widget.filter(reacts_to_press).map(|w| w.id);
                 self.scene.press(id, now);
             }
-            Interaction::Release => self.scene.release(now),
+            Interaction::Release => {
+                self.stop_talking();
+                self.scene.release(now);
+            }
             Interaction::Tap { widget, x } => {
                 if let Some(widget) = self.widget(widget) {
                     self.tap(&widget, x, now);
@@ -260,6 +317,23 @@ impl Engine {
                     nexus_render::volume_fraction_at(widget.x, widget.w, x).unwrap_or(0.0);
                 if done {
                     self.scene.slide(None);
+                    let source = match &widget.kind {
+                        WidgetKind::Volume(props) => props.source,
+                        _ => VolumeSource::System,
+                    };
+                    let request = match source {
+                        VolumeSource::System => None,
+                        VolumeSource::DiscordInput => Some(crate::discord::Request::InputVolume(
+                            (fraction * 100.0).round() as u8,
+                        )),
+                        VolumeSource::DiscordOutput => Some(crate::discord::Request::OutputVolume(
+                            (fraction * 200.0).round() as u16,
+                        )),
+                    };
+                    if let Some(request) = request {
+                        self.discord_request(&widget.id, request, now);
+                        return;
+                    }
                     let percent = (fraction * 100.0).round() as u8;
                     self.own_volume_until = now + OWN_VOLUME_QUIET;
                     self.queue(
@@ -311,6 +385,23 @@ impl Engine {
                 self.perform(&widget.id, &ActionSpec::Media { command, player }, now);
                 self.metrics.request_refresh();
             }
+            WidgetKind::Volume(props) if props.source.is_discord() => {
+                // The icon mutes the microphone, or deafens.
+                let command = if props.source == VolumeSource::DiscordInput {
+                    DiscordCommand::ToggleMute
+                } else {
+                    DiscordCommand::ToggleDeafen
+                };
+                self.discord_request(
+                    &widget.id,
+                    crate::discord::Request::Command {
+                        command,
+                        channel: None,
+                        step: None,
+                    },
+                    now,
+                );
+            }
             WidgetKind::Volume(_) => {
                 // Taps on the speaker icon (outside the slider) toggle mute.
                 self.queue(
@@ -326,7 +417,131 @@ impl Engine {
                 self.timers.tap(&key, now);
             }
             WidgetKind::Entity(props) => self.toggle_entity(&widget.id, &props.entity_id),
+            WidgetKind::DiscordVoice(props) => {
+                let Some(mut info) = self.discord.info() else {
+                    return;
+                };
+                info.rotation = self.voice_rotation;
+                let channel = nexus_render::discord_channel_at(widget.x, widget.w, props, &info, x);
+                if channel.is_some() && channel == info.channel {
+                    let text = nexus_render::format::word(
+                        nexus_render::format::Word::AlreadyInChannel,
+                        self.locale(),
+                    );
+                    self.toast("check", text.to_string(), now);
+                } else if let Some(channel) = channel {
+                    let join = ActionSpec::Discord {
+                        command: DiscordCommand::JoinVoice,
+                        channel: Some(channel),
+                        step: None,
+                    };
+                    self.perform(&widget.id, &join, now);
+                }
+            }
+            WidgetKind::DiscordCall(props) => self.tap_call(widget, props, x, now),
             _ => {}
+        }
+    }
+
+    /// A tap in the call widget: open someone's controls, or use them.
+    fn tap_call(
+        &mut self,
+        widget: &Widget,
+        props: &nexus_config::DiscordCallProps,
+        x: u16,
+        now: Instant,
+    ) {
+        let Some(mut info) = self.discord.info() else {
+            return;
+        };
+        info.focus = self.discord_focus(now);
+        let Some(hit) = nexus_render::discord_call_hit(widget.x, widget.w, props, &info, x) else {
+            return;
+        };
+        let member = |id: &str| {
+            info.current_channel()
+                .and_then(|channel| channel.members.iter().find(|m| m.user_id == id))
+                .cloned()
+        };
+        // Discord sets no volume of your own for you: your controls are
+        // your microphone's.
+        let yourself = |id: &str| info.self_id.as_deref() == Some(id);
+        let microphone = |delta: i16| {
+            let volume = (i16::from(info.input_volume) + delta).clamp(0, 100);
+            crate::discord::Request::InputVolume(volume as u8)
+        };
+        let step = DISCORD_USER_STEP as i16;
+        let request = match hit {
+            CallHit::Mute(id) if yourself(&id) => Some(crate::discord::Request::Command {
+                command: DiscordCommand::ToggleMute,
+                channel: None,
+                step: None,
+            }),
+            CallHit::Quieter(id) if yourself(&id) => Some(microphone(-step)),
+            CallHit::Louder(id) if yourself(&id) => Some(microphone(step)),
+            CallHit::Member(id) => {
+                self.discord_focus = Some((id, now));
+                return;
+            }
+            CallHit::Close => {
+                self.discord_focus = None;
+                return;
+            }
+            CallHit::Mute(id) => member(&id).map(|m| crate::discord::Request::UserMute {
+                mute: !m.local_muted,
+                user: id,
+            }),
+            CallHit::Quieter(id) => member(&id).map(|m| crate::discord::Request::UserVolume {
+                volume: m.volume.saturating_sub(DISCORD_USER_STEP),
+                user: id,
+            }),
+            CallHit::Louder(id) => member(&id).map(|m| crate::discord::Request::UserVolume {
+                volume: (m.volume + DISCORD_USER_STEP).min(200),
+                user: id,
+            }),
+        };
+        if let Some((_, touched)) = self.discord_focus.as_mut() {
+            *touched = now;
+        }
+        if let Some(request) = request {
+            self.discord_request(&widget.id, request, now);
+        }
+    }
+
+    /// The member whose controls are open, unless they timed out.
+    fn discord_focus(&mut self, now: Instant) -> Option<String> {
+        if self
+            .discord_focus
+            .as_ref()
+            .is_some_and(|(_, touched)| now.saturating_duration_since(*touched) >= DISCORD_FOCUS)
+        {
+            self.discord_focus = None;
+        }
+        self.discord_focus.as_ref().map(|(id, _)| id.clone())
+    }
+
+    fn discord_request(&mut self, label: &str, request: crate::discord::Request, now: Instant) {
+        if let Err(error) = self.discord.send(label, request) {
+            self.toast("alert-triangle", error, now);
+        }
+    }
+
+    /// A push-to-talk button went down: open the microphone if it is muted.
+    fn start_talking(&mut self, now: Instant) {
+        let muted = self
+            .discord
+            .info()
+            .is_some_and(|info| info.channel.is_some() && info.self_muted);
+        if muted && !self.talking {
+            self.talking = true;
+            self.discord_request("push-to-talk", crate::discord::Request::SetMute(false), now);
+        }
+    }
+
+    /// The finger lifted: mute again what push to talk opened.
+    fn stop_talking(&mut self) {
+        if std::mem::take(&mut self.talking) {
+            self.discord.mute_again();
         }
     }
 
@@ -544,6 +759,23 @@ impl Engine {
                     self.toast("alert-triangle", error, now);
                 }
             }
+            // Push to talk works on press and release, not on the tap.
+            ActionSpec::Discord {
+                command: DiscordCommand::PushToTalk,
+                ..
+            } => {}
+            ActionSpec::Discord {
+                command,
+                channel,
+                step,
+            } => {
+                let request = crate::discord::Request::Command {
+                    command: *command,
+                    channel: channel.clone(),
+                    step: *step,
+                };
+                self.discord_request(label, request, now);
+            }
             ActionSpec::Sequence { steps, delay_ms } => {
                 self.sequences += 1;
                 let sequence = self.sequences;
@@ -570,8 +802,9 @@ impl Engine {
     }
 
     fn switch_profile(&mut self, profile_id: &str, now: Instant) -> anyhow::Result<()> {
-        // A deliberate switch ends any app-driven one.
+        // A deliberate switch ends any app- or voice-driven one.
         self.auto_return_profile = None;
+        self.voice_return_profile = None;
         self.change_profile(profile_id, now, true)
     }
 
@@ -642,6 +875,47 @@ impl Engine {
         }
     }
 
+    /// Switches to the profile that follows Discord voice when you join a
+    /// voice channel, and back when you leave.
+    fn follow_voice(&mut self, in_voice: bool, now: Instant) {
+        if in_voice == std::mem::replace(&mut self.in_voice, in_voice) {
+            return;
+        }
+        let current = self.runtime.profile().id.clone();
+        let voice = self
+            .runtime
+            .config
+            .profiles
+            .iter()
+            .find(|p| p.discord_voice)
+            .map(|p| p.id.clone());
+        let target = if in_voice {
+            match voice {
+                Some(id) if id != current => {
+                    self.voice_return_profile = Some(current);
+                    id
+                }
+                _ => return,
+            }
+        } else {
+            match self.voice_return_profile.take() {
+                // Only when the voice profile still shows: a switch since
+                // then was the user's.
+                Some(previous) if voice.as_deref() == Some(current.as_str()) => previous,
+                _ => return,
+            }
+        };
+        if self.change_profile(&target, now, false).is_ok() {
+            log_fields(
+                &self.logger,
+                Level::Info,
+                "profile_auto",
+                "Discord voice switched the profile",
+                [("profile", target), ("in_voice", in_voice.to_string())],
+            );
+        }
+    }
+
     fn page_changed(&mut self, change: PageChange, cause: &str, now: Instant) {
         let style = self.runtime.settings().transition;
         self.cancel_touch(now);
@@ -679,6 +953,110 @@ impl Engine {
     }
 
     // ---- periodic work ---------------------------------------------------
+
+    /// Puts new notifications on the strip. Discord's come first, so a
+    /// desktop copy of one can be recognized.
+    fn poll_notifications(&mut self, now: Instant) {
+        let settings = self.runtime.settings().clone();
+        let shown = &settings.notifications;
+        let muted = |name: &str| {
+            shown
+                .muted_apps
+                .iter()
+                .any(|muted| name.eq_ignore_ascii_case(muted.trim()))
+        };
+        let longest = Duration::from_millis(u64::from(shown.duration_ms)).max(NOTIFICATION_MIN);
+        let show_discord = shown.enabled && settings.discord.notifications && !muted("discord");
+        for n in self.discord.take_notifications() {
+            if !show_discord {
+                continue;
+            }
+            self.recent_discord.remember(&n.body, now);
+            // Private: the app's name, nothing of the message or its author.
+            let (title, body, icon) = if shown.private {
+                ("Discord".to_string(), String::new(), None)
+            } else {
+                (n.title, n.body, n.icon)
+            };
+            let scroll = match settings.discord.scroll {
+                NotificationScroll::All => true,
+                NotificationScroll::Direct => n.direct,
+                NotificationScroll::Never => false,
+            };
+            // A long message stays until it scrolled through and was read.
+            let duration = nexus_render::notification_scroll_time(&body)
+                .filter(|_| scroll)
+                .map_or(longest, |time| time.clamp(longest, SCROLL_MAX));
+            self.scene.show_notification(
+                Overlay::Notification {
+                    app: "Discord".into(),
+                    title,
+                    body,
+                    icon,
+                    link: n.link,
+                    scroll,
+                },
+                duration,
+                now,
+                false,
+            );
+        }
+
+        // While Discord notifies here, its desktop copies wait a moment for
+        // the original, which can arrive just after them.
+        let from_discord = show_discord && self.discord.notifying();
+        for n in self.notifications.poll(shown.enabled, now, &self.logger) {
+            if n.names.iter().any(|name| muted(name)) {
+                continue;
+            }
+            let discord = n
+                .names
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case("discord"));
+            if discord && from_discord {
+                self.held_desktop.push((now + DESKTOP_COPY_HOLD, n));
+            } else {
+                self.show_desktop_notification(n, now);
+            }
+        }
+        let (due, waiting) = std::mem::take(&mut self.held_desktop)
+            .into_iter()
+            .partition(|(at, _)| now >= *at);
+        self.held_desktop = waiting;
+        for (_, n) in due {
+            if !self.recent_discord.repeats(&n.body, now) {
+                self.show_desktop_notification(n, now);
+            }
+        }
+    }
+
+    fn show_desktop_notification(&mut self, n: crate::notifications::Prepared, now: Instant) {
+        let shown = &self.runtime.settings().notifications;
+        // Private: the app's name and icon, nothing of the message.
+        let (title, body, icon) = if shown.private {
+            (n.app.clone(), String::new(), n.app_icon)
+        } else {
+            (n.title, n.body, n.picture.or(n.app_icon))
+        };
+        // Up to the configured time; shorter when the app asks for less.
+        let longest = Duration::from_millis(u64::from(shown.duration_ms)).max(NOTIFICATION_MIN);
+        let duration = n
+            .timeout
+            .map_or(longest, |asked| asked.clamp(NOTIFICATION_MIN, longest));
+        self.scene.show_notification(
+            Overlay::Notification {
+                app: n.app,
+                title,
+                body,
+                icon,
+                link: None,
+                scroll: false,
+            },
+            duration,
+            now,
+            n.replaces,
+        );
+    }
 
     /// Housekeeping between frames: scheduled actions, timers, overlays for
     /// external events, auto-return, provider wishes.
@@ -772,40 +1150,13 @@ impl Engine {
             self.follow_focus(&window, now);
         }
 
+        self.poll_notifications(now);
         let settings = self.runtime.settings().clone();
-        let shown = &settings.notifications;
-        for n in self.notifications.poll(shown.enabled, now, &self.logger) {
-            let muted = shown.muted_apps.iter().any(|muted| {
-                n.names
-                    .iter()
-                    .any(|name| name.eq_ignore_ascii_case(muted.trim()))
-            });
-            if muted {
-                continue;
-            }
-            // Private: the app's name and icon, nothing of the message.
-            let (title, body, icon) = if shown.private {
-                (n.app.clone(), String::new(), n.app_icon)
-            } else {
-                (n.title, n.body, n.picture.or(n.app_icon))
-            };
-            // Up to the configured time; shorter when the app asks for less.
-            let longest = Duration::from_millis(u64::from(shown.duration_ms)).max(NOTIFICATION_MIN);
-            let duration = n
-                .timeout
-                .map_or(longest, |asked| asked.clamp(NOTIFICATION_MIN, longest));
-            self.scene.show_notification(
-                Overlay::Notification {
-                    app: n.app,
-                    title,
-                    body,
-                    icon,
-                },
-                duration,
-                now,
-                n.replaces,
-            );
-        }
+        let in_voice = self
+            .discord
+            .info()
+            .is_some_and(|info| info.channel.is_some());
+        self.follow_voice(in_voice, now);
 
         let snapshot = self.metrics.latest();
         if let Some(percent) = snapshot.metrics.volume_percent {
@@ -872,6 +1223,10 @@ impl Engine {
             self.providers.set_wants(wants);
             self.obs
                 .set_wanted(crate::obs::profile_uses_obs(self.runtime.profile()));
+            self.discord.set_wanted(crate::discord::wanted(
+                &self.runtime.config,
+                self.runtime.profile(),
+            ));
         }
     }
 
@@ -902,6 +1257,25 @@ impl Engine {
         let settings = self.runtime.settings().clone();
         let mut live = self.live.build(&settings, &self.providers.provided());
         live.obs = self.obs.info(now);
+        live.discord = self.discord.info();
+        let focus = self.discord_focus(now);
+        // Voice widgets with more channels than room turn their pages, but
+        // not under a finger about to tap.
+        if now.saturating_duration_since(self.runtime.last_touch) >= ROTATION_PAUSE
+            && now.saturating_duration_since(self.voice_rotated) >= ROTATION_EVERY
+        {
+            self.voice_rotation = self.voice_rotation.wrapping_add(1);
+            self.voice_rotated = now;
+        }
+        let page = self.runtime.page();
+        if let Some(discord) = live.discord.as_mut() {
+            discord.focus = focus;
+            discord.rotation = self.voice_rotation;
+            discord.mute_badge = settings.discord.mute_indicator
+                && discord.channel.is_some()
+                && (discord.self_muted || discord.self_deafened)
+                && !page.widgets.iter().any(shows_own_mute);
+        }
         if let Some(widget) = self
             .runtime
             .page()
@@ -971,6 +1345,18 @@ impl Engine {
         });
         if seconds_visible || shows_obs {
             interval = interval.min(Duration::from_millis(250));
+        }
+        // Discord buttons and widgets follow who speaks.
+        let shows_discord = page.widgets.iter().any(|w| {
+            matches!(w.tap, Some(ActionSpec::Discord { .. }))
+                || matches!(
+                    &w.kind,
+                    WidgetKind::DiscordVoice(_) | WidgetKind::DiscordCall(_)
+                )
+                || matches!(&w.kind, WidgetKind::Volume(p) if p.source.is_discord())
+        });
+        if shows_discord {
+            interval = interval.min(Duration::from_millis(150));
         }
         if let Some(deadline) = self.touch.next_deadline() {
             interval = interval.min(
@@ -1258,7 +1644,37 @@ fn reacts_to_press(widget: &Widget) -> bool {
                 | WidgetKind::Media(_)
                 | WidgetKind::Entity(_)
                 | WidgetKind::Timer(_)
+                | WidgetKind::DiscordVoice(_)
+                | WidgetKind::DiscordCall(_)
         )
+}
+
+/// A button that opens the microphone while it is held.
+fn is_push_to_talk(widget: &Widget) -> bool {
+    matches!(
+        widget.tap,
+        Some(ActionSpec::Discord {
+            command: DiscordCommand::PushToTalk,
+            ..
+        })
+    )
+}
+
+/// Widgets that already show whether you are muted on Discord, so the
+/// corner badge is not needed on their page.
+fn shows_own_mute(widget: &Widget) -> bool {
+    let mute_button = matches!(
+        widget.tap,
+        Some(ActionSpec::Discord {
+            command: DiscordCommand::ToggleMute
+                | DiscordCommand::ToggleDeafen
+                | DiscordCommand::PushToTalk,
+            ..
+        })
+    );
+    mute_button
+        || matches!(widget.kind, WidgetKind::DiscordCall(_))
+        || matches!(&widget.kind, WidgetKind::Volume(p) if p.source.is_discord())
 }
 
 /// Steps that move between pages of the profile they were started in, also

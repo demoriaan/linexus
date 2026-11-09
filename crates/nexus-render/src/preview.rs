@@ -138,6 +138,56 @@ pub fn sample_live(locale: Locale) -> LiveData {
         muted: [("Mic/Aux".to_string(), false)].into(),
         ..ObsInfo::default()
     });
+    // A few people in voice; you sit in "Gaming" with someone speaking.
+    let member = |id: &str, name: &str, speaking: bool, muted: bool| DiscordMember {
+        user_id: id.into(),
+        name: name.into(),
+        speaking,
+        muted,
+        volume: 100,
+        ..DiscordMember::default()
+    };
+    live.discord = Some(DiscordInfo {
+        channel: Some("2".into()),
+        guild: Some("1".into()),
+        guilds: [(
+            "1".to_string(),
+            vec![
+                DiscordVoiceChannel {
+                    id: "2".into(),
+                    name: "Gaming".into(),
+                    members: vec![
+                        member("11", "Axel", false, false),
+                        member("12", "Nina", true, false),
+                        member("13", "Sam", false, true),
+                    ],
+                },
+                DiscordVoiceChannel {
+                    id: "3".into(),
+                    name: "Chill".into(),
+                    members: vec![
+                        member("14", "Léa", false, false),
+                        member("15", "Max", false, false),
+                    ],
+                },
+                DiscordVoiceChannel {
+                    id: "4".into(),
+                    name: "AFK".into(),
+                    members: Vec::new(),
+                },
+            ],
+        )]
+        .into(),
+        input_volume: 80,
+        output_volume: 100,
+        noise_suppression: true,
+        echo_cancellation: true,
+        link: Some(DiscordLink {
+            connected: true,
+            ping_ms: Some(42),
+        }),
+        ..DiscordInfo::default()
+    });
     live.timers.insert(
         "timer".into(),
         TimerInfo {
@@ -192,6 +242,8 @@ pub fn sample_notification(locale: Locale) -> Overlay {
         title: title.into(),
         body: body.into(),
         icon: None,
+        link: None,
+        scroll: false,
     }
 }
 

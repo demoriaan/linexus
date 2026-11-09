@@ -1,5 +1,6 @@
 // Connections: services the strip reads from or talks to — Home Assistant,
-// OBS Studio, weather, desktop notifications, and incoming/outgoing webhooks.
+// OBS Studio, Discord, weather, desktop notifications, and incoming/outgoing
+// webhooks.
 import { html, useEffect, useState } from "../lib/html.js";
 import { api } from "../lib/api.js";
 import { t } from "../lib/i18n.js";
@@ -7,7 +8,7 @@ import { Icon } from "../lib/icons.js";
 import { config, edit, toast, uniqueId } from "../lib/store.js";
 import { sensors, loadSensors, saveSection } from "../lib/sensors.js";
 import { Switch, ConfirmButton } from "../components/Dialog.js";
-import { Field, TextInput, LocationField, forgetObsSources } from "../components/Fields.js";
+import { Field, TextInput, Select, LocationField, forgetObsSources, forgetDiscordGuilds } from "../components/Fields.js";
 
 export function ConnectionsView() {
   useEffect(() => { loadSensors(); }, []);
@@ -18,6 +19,7 @@ export function ConnectionsView() {
         <div class="stack" style=${{ gap: "18px" }}>
           <${HomeAssistant} />
           <${Obs} />
+          <${Discord} />
           <${Weather} />
         </div>
         <div class="stack" style=${{ gap: "18px" }}>
@@ -124,6 +126,97 @@ function Obs() {
           ${status?.ok && html`<span class="ok-text">${status.ok}</span>`}
           ${status?.error && html`<span class="bad-text">${status.error}</span>`}
         </div>
+      </div>
+    </section>`;
+}
+
+const DISCORD_PORTAL = "https://discord.com/developers/applications";
+
+function Discord() {
+  const [status, setStatus] = useState(null);
+  const [clientId, setClientId] = useState("");
+  const [secret, setSecret] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const refresh = async () => {
+    try {
+      const data = await api.get("/api/discord/status");
+      setStatus(data);
+      setClientId(data.client_id ?? "");
+    } catch (error) {
+      setStatus({ error: error.message });
+    }
+  };
+  useEffect(() => { refresh(); }, []);
+  const save = async (remove) => {
+    try {
+      if (remove) await api.del("/api/discord/app");
+      else await api.post("/api/discord/app", { client_id: clientId.trim(), client_secret: secret });
+      setSecret("");
+      setResult(null);
+      forgetDiscordGuilds();
+      await refresh();
+      toast(t(remove ? "discord.removed" : "discord.saved"), "ok");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  };
+  const connect = async () => {
+    setBusy(true);
+    setResult(null);
+    try {
+      const data = await api.post("/api/discord/authorize", {});
+      forgetDiscordGuilds();
+      setResult({ ok: t("discord.connected", { user: data.user }) });
+      await refresh();
+    } catch (error) {
+      setResult({ error: error.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const user = status?.user;
+  const client = status?.client;
+  const clientNote = ["unsupported", "not_running", "unknown_application"].includes(client) ? t(`discord.client.${client}`) : null;
+  const changed = clientId.trim() !== (status?.client_id ?? "") || secret !== "";
+  const shown = { notifications: true, mute_indicator: true, scroll: "direct", ...config.value.settings.discord };
+  const setShown = (patch) => edit((d) => { d.settings.discord = { ...shown, ...d.settings.discord, ...patch }; });
+  return html`
+    <section class="panel">
+      <header><${Icon} name="headphones" /><h3>Discord</h3>${user && html`<span class="dot ok" title=${t("discord.connected", { user })}></span>`}</header>
+      <p class="hint" style=${{ marginBottom: "12px" }}>${t("discord.lead")}</p>
+      <details style=${{ marginBottom: "12px" }} open=${!status?.configured}>
+        <summary>${t("discord.setup")}</summary>
+        <ol class="hint" style=${{ margin: "8px 0 0", paddingLeft: "20px", display: "grid", gap: "4px" }}>
+          <li>${t("discord.step1")} <a href=${DISCORD_PORTAL} target="_blank" rel="noopener noreferrer">${DISCORD_PORTAL.replace("https://", "")}</a></li>
+          <li>${t("discord.step2")}</li>
+          <li>${t("discord.step3")}</li>
+        </ol>
+      </details>
+      <div class="stack">
+        <div class="two">
+          <${Field} label=${t("discord.client_id")}><${TextInput} value=${clientId} placeholder="123456789012345678" onInput=${setClientId} /><//>
+          <${Field} label=${t("discord.client_secret")}><${TextInput} type="password" value=${secret}
+            placeholder=${status?.has_secret ? t("discord.secret.saved") : ""} onInput=${setSecret} /><//>
+        </div>
+        <div class="row">
+          <button class="btn" onClick=${() => save(false)} disabled=${!clientId.trim() || !changed || (!secret && !status?.has_secret)}>${t("common.save")}</button>
+          <button class="btn primary" onClick=${connect} disabled=${!status?.configured || changed || busy}>${busy ? t("discord.connecting") : t("discord.connect")}</button>
+          ${status?.configured && html`<button class="btn ghost" onClick=${() => save(true)}>${t("discord.remove")}</button>`}
+        </div>
+        ${result?.ok && html`<span class="ok-text">${result.ok}</span>`}
+        ${result?.error && html`<span class="bad-text">${result.error}</span>`}
+        ${!result && user && html`<span class="ok-text">${t("discord.connected", { user })}</span>`}
+        ${clientNote && html`<span class=${client === "not_running" ? "hint" : "bad-text"}>${clientNote}</span>`}
+        ${user && !status?.notifications && shown.notifications && html`<span class="hint">${t("discord.reconnect.notifications")}</span>`}
+        <hr class="divider" />
+        <div class="field inline"><span>${t("discord.notifications")}</span><${Switch} ariaLabel=${t("discord.notifications")} checked=${shown.notifications} onChange=${(notifications) => setShown({ notifications })} /></div>
+        <small class="hint" style=${{ marginTop: "-8px" }}>${t("discord.notifications.hint")}</small>
+        ${shown.notifications && html`<${Field} label=${t("discord.scroll")} hint=${t("discord.scroll.hint")}>
+          <${Select} value=${shown.scroll} options=${["direct", "all", "never"]} labelOf=${(o) => t(`discord.scroll.${o}`)} onChange=${(scroll) => setShown({ scroll })} />
+        <//>`}
+        <div class="field inline"><span>${t("discord.mute_indicator")}</span><${Switch} ariaLabel=${t("discord.mute_indicator")} checked=${shown.mute_indicator} onChange=${(mute_indicator) => setShown({ mute_indicator })} /></div>
+        <small class="hint" style=${{ marginTop: "-8px" }}>${t("discord.mute_indicator.hint")}</small>
       </div>
     </section>`;
 }

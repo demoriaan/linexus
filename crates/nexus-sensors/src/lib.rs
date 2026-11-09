@@ -1,3 +1,4 @@
+mod discord;
 mod feeds;
 mod integrations;
 mod obs;
@@ -8,6 +9,14 @@ pub use providers::clock::{local_clock, LocalClock};
 
 pub use feeds::{cached_feed_titles, inspect_feed_url, FeedInspection};
 
+pub use discord::{
+    authorize as discord_authorize, avatar_url as discord_avatar_url, discord_guilds,
+    sign_in as discord_sign_in, socket_paths as discord_socket_paths,
+    trusted_image_url as discord_trusted_image_url, voice_channels as discord_voice_channels,
+    DiscordApp, DiscordChannel, DiscordConnection, DiscordError, DiscordEvent, DiscordGuild,
+    DiscordToken, SignedIn as DiscordSignedIn, VoiceMember as DiscordVoiceMember,
+    NOTIFICATIONS_SCOPE as DISCORD_NOTIFICATIONS_SCOPE, REDIRECT_URI as DISCORD_REDIRECT_URI,
+};
 pub use obs::{
     input_names as obs_input_names, obs_overview, ObsConnection, ObsError, ObsEvent, ObsOverview,
     ObsServer, DEFAULT_PORT as OBS_DEFAULT_PORT, MAX_INPUTS as OBS_MAX_INPUTS,
@@ -47,6 +56,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -688,6 +698,10 @@ pub struct SensorConfig {
     /// OBS Studio's websocket server, for OBS buttons.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub obs_server: Option<ObsServer>,
+    /// The user's own Discord application and its token, for Discord
+    /// buttons and the voice widget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discord: Option<DiscordApp>,
 }
 
 /// How the sensors page presents headlines. Read by the daemon on every
@@ -1136,10 +1150,62 @@ pub fn sensor_config_problem() -> Option<String> {
 /// request on its own thread).
 static SENSOR_CONFIG_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-pub fn save_sensor_config(config: SensorConfig) -> std::io::Result<SensorConfig> {
-    let _guard = SENSOR_CONFIG_WRITE
+/// Held while sensors.json is read, changed and written. Two processes write
+/// it, Studio and the daemon (a renewed Discord token), so a process-wide
+/// mutex alone would let one overwrite the other's change.
+struct SensorConfigLock {
+    _process: std::sync::MutexGuard<'static, ()>,
+    /// The flock ends when this closes; None when the file cannot be opened,
+    /// which leaves only the protection within this process.
+    _file: Option<fs::File>,
+}
+
+fn lock_sensor_config() -> SensorConfigLock {
+    let process = SENSOR_CONFIG_WRITE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let path = sensor_config_path().with_extension("json.lock");
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
+        .ok();
+    if let Some(file) = &file {
+        // SAFETY: flock only reads the descriptor, which `file` keeps open.
+        let _ = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+    }
+    SensorConfigLock {
+        _process: process,
+        _file: file,
+    }
+}
+
+/// Reads sensors.json, lets `change` edit it and writes it back, all under
+/// the write lock. Refuses a file that does not parse, so a hand-edited file
+/// with a typo is never replaced. A missing file starts from the defaults.
+/// The inner error is `change` declining; nothing is written then.
+pub fn update_sensor_config<T, E>(
+    change: impl FnOnce(&mut SensorConfig) -> Result<T, E>,
+) -> std::io::Result<Result<T, E>> {
+    let _guard = lock_sensor_config();
+    let mut config = match read_sensor_config_text(&sensor_config_path()) {
+        Ok(text) => serde_json::from_str::<SensorConfig>(&text)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => SensorConfig::default(),
+        Err(error) => return Err(error),
+    };
+    match change(&mut config) {
+        Ok(value) => write_sensor_config(config).map(|_| Ok(value)),
+        Err(declined) => Ok(Err(declined)),
+    }
+}
+
+pub fn save_sensor_config(config: SensorConfig) -> std::io::Result<SensorConfig> {
+    let _guard = lock_sensor_config();
     write_sensor_config(config)
 }
 
@@ -1151,9 +1217,7 @@ pub fn update_news_config(
     rss: Vec<RssFeedConfig>,
     display: NewsDisplayConfig,
 ) -> std::io::Result<SensorConfig> {
-    let _guard = SENSOR_CONFIG_WRITE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _guard = lock_sensor_config();
     let mut config = match fs::read_to_string(sensor_config_path()) {
         Ok(text) => serde_json::from_str::<SensorConfig>(&text).map_err(|error| {
             std::io::Error::new(
@@ -1172,9 +1236,20 @@ pub fn update_news_config(
     write_sensor_config(config)
 }
 
-/// Normalizes and writes atomically (temp file + rename), so the daemon's
-/// once-a-second reader never sees a half-written file. The file holds the
-/// Home Assistant token, the IFTTT key and MQTT passwords, so it is 0600.
+/// Stores a renewed Discord token, keeping everything else as stored on
+/// disk. Does nothing when the application changed or was removed since
+/// (Studio wins), or when sensors.json does not parse.
+pub fn store_discord_token(client_id: &str, token: DiscordToken) -> std::io::Result<()> {
+    update_sensor_config(|config| match config.discord.as_mut() {
+        Some(app) if app.client_id == client_id => {
+            app.token = Some(token);
+            Ok(())
+        }
+        _ => Err(()),
+    })
+    .map(drop)
+}
+
 fn write_sensor_config(mut config: SensorConfig) -> std::io::Result<SensorConfig> {
     normalize_sensor_config(&mut config);
     let path = sensor_config_path();
@@ -1263,6 +1338,17 @@ fn normalize_sensor_config(config: &mut SensorConfig) {
         .is_some_and(|server| server.host.is_empty() || server.port == 0)
     {
         config.obs_server = None;
+    }
+    if let Some(app) = config.discord.as_mut() {
+        app.client_id = app.client_id.trim().to_string();
+        app.client_secret = app.client_secret.trim().to_string();
+    }
+    if config
+        .discord
+        .as_ref()
+        .is_some_and(|app| app.client_id.is_empty())
+    {
+        config.discord = None;
     }
     for ifttt in &mut config.ifttt {
         ifttt.id = sanitize_sensor_id(&ifttt.id);
@@ -3620,7 +3706,65 @@ PID PPID COMMAND RSS %CPU COMMAND
         let loaded = load_sensor_config();
         assert_eq!(loaded.home_assistant_server.unwrap().token, "secret");
         assert_eq!(mode(&path), 0o600);
-        assert_eq!(file_names(&dir), ["sensors.json"]);
+        // The lock file stays; no temporary file does.
+        assert_eq!(file_names(&dir), ["sensors.json", "sensors.json.lock"]);
+
+        match old {
+            Some(value) => std::env::set_var("NEXUS_SENSOR_CONFIG", value),
+            None => std::env::remove_var("NEXUS_SENSOR_CONFIG"),
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn config_updates_write_what_was_changed_and_nothing_when_declined() {
+        let _guard = SENSOR_ENV_LOCK.lock().unwrap();
+        let dir = test_dir("config-update");
+        let path = dir.join("sensors.json");
+        let old = std::env::var_os("NEXUS_SENSOR_CONFIG");
+        std::env::set_var("NEXUS_SENSOR_CONFIG", &path);
+        let app = DiscordApp {
+            client_id: "42".into(),
+            client_secret: "secret".into(),
+            token: None,
+        };
+        let token = DiscordToken {
+            access_token: "fresh".into(),
+            refresh_token: "next".into(),
+            expires_at: 1,
+            user: String::new(),
+            scopes: Vec::new(),
+        };
+
+        update_sensor_config(|config| {
+            config.discord = Some(app.clone());
+            Ok::<_, ()>(())
+        })
+        .unwrap()
+        .unwrap();
+        // A renewed token lands, a token for an application since replaced
+        // does not.
+        store_discord_token("42", token.clone()).unwrap();
+        let stored = load_sensor_config().discord.unwrap();
+        assert_eq!(stored.token.as_ref().unwrap().access_token, "fresh");
+        let mut other = token;
+        other.access_token = "stale".into();
+        store_discord_token("43", other).unwrap();
+        let stored = load_sensor_config().discord.unwrap();
+        assert_eq!(stored.token.unwrap().access_token, "fresh");
+
+        let declined = update_sensor_config(|config| {
+            config.discord = None;
+            Err::<(), _>("no")
+        })
+        .unwrap();
+        assert_eq!(declined, Err("no"));
+        assert!(load_sensor_config().discord.is_some());
+
+        // A file with a typo is never replaced.
+        fs::write(&path, "{ not json").unwrap();
+        assert!(update_sensor_config(|_| Ok::<_, ()>(())).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
 
         match old {
             Some(value) => std::env::set_var("NEXUS_SENSOR_CONFIG", value),

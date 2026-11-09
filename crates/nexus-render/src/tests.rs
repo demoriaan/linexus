@@ -128,6 +128,8 @@ fn page_indicator_and_overlays_render() {
             title: "Neue Nachricht".into(),
             body: "Das Meeting beginnt in 10 Minuten".into(),
             icon: None,
+            link: None,
+            scroll: false,
         },
         &Theme::default(),
         &live,
@@ -318,6 +320,163 @@ fn obs_buttons_show_what_obs_does() {
         ui: &ui(),
     };
     assert_eq!(widgets::text::expand("{obs.scene}", &ctx), "–");
+}
+
+#[test]
+fn discord_call_widget_sliders_and_the_muted_badge() {
+    use nexus_config::{
+        ActionSpec, ButtonProps, DiscordCallProps, DiscordCommand, Page, VolumeProps, VolumeSource,
+        Widget, WidgetKind,
+    };
+    let talk = ActionSpec::Discord {
+        command: DiscordCommand::PushToTalk,
+        channel: None,
+        step: None,
+    };
+    let page = Page {
+        id: "voice".into(),
+        name: "Voice".into(),
+        hidden: false,
+        auto_return_seconds: None,
+        background: None,
+        widgets: vec![
+            Widget::new(
+                "call",
+                0,
+                330,
+                WidgetKind::DiscordCall(DiscordCallProps::default()),
+            ),
+            Widget::new(
+                "mic",
+                330,
+                160,
+                WidgetKind::Volume(VolumeProps {
+                    source: VolumeSource::DiscordInput,
+                    ..VolumeProps::default()
+                }),
+            ),
+            Widget::new(
+                "talk",
+                490,
+                90,
+                WidgetKind::Button(ButtonProps {
+                    label: "Talk".into(),
+                    icon: Some("lucide:mic".into()),
+                    ..ButtonProps::default()
+                }),
+            )
+            .with_tap(talk),
+        ],
+    };
+    let theme = Theme::default();
+    let mut live = preview::sample_live(Locale::Fr);
+    let normal = render_page(&page, &theme, &live, &ui());
+    snapshot("discord-call", &normal);
+
+    live.discord.as_mut().unwrap().focus = Some("12".into());
+    let focused = render_page(&page, &theme, &live, &ui());
+    snapshot("discord-call-focus", &focused);
+    assert_ne!(normal.rgba(), focused.rgba());
+
+    // The badge: red pixels in the top right corner.
+    let red_corner = |canvas: &Canvas| {
+        canvas
+            .rgba()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(i, px)| i % WIDTH > 600 && i / WIDTH < 22 && px[0] > 200 && px[1] < 100)
+            .count()
+    };
+    assert_eq!(red_corner(&normal), 0);
+    let discord = live.discord.as_mut().unwrap();
+    discord.focus = None;
+    discord.self_muted = true;
+    discord.mute_badge = true;
+    let badge = render_page(&page, &theme, &live, &ui());
+    snapshot("discord-muted-badge", &badge);
+    assert!(red_corner(&badge) > 100, "{}", red_corner(&badge));
+
+    live.discord.as_mut().unwrap().channel = None;
+    snapshot(
+        "discord-not-in-voice",
+        &render_page(&page, &theme, &live, &ui()),
+    );
+}
+
+#[test]
+fn long_notifications_scroll_and_narrow_discord_widgets() {
+    use nexus_config::{DiscordCallProps, DiscordVoiceProps, Page, Widget, WidgetKind};
+    use std::time::Duration;
+    let theme = Theme::default();
+    let live = preview::sample_live(Locale::Fr);
+    let body = "Salut ! Tu viens ce soir ? On lance la partie vers 21 h, il reste deux places dans l'équipe et on a besoin d'un soigneur, ramène ton casque.";
+    assert!(notification_scroll_time("Court").is_none());
+    let time = notification_scroll_time(body).unwrap();
+    assert!(time > SCROLL_DELAY + SCROLL_HOLD, "{time:?}");
+    let note = |scroll| Overlay::Notification {
+        app: "Discord".into(),
+        title: "Nina".into(),
+        body: body.into(),
+        icon: None,
+        link: None,
+        scroll,
+    };
+    let frame = |overlay: &Overlay, shown: Duration| {
+        let mut canvas = Canvas::new();
+        draw_overlay_at(&mut canvas, overlay, &theme, &live, 1.0, shown);
+        canvas
+    };
+    let start = frame(&note(true), Duration::ZERO);
+    let middle = frame(&note(true), time - SCROLL_HOLD);
+    snapshot("notification-scroll-start", &start);
+    snapshot("notification-scroll-end", &middle);
+    // Still during the wait, moved at the end; a message that does not
+    // scroll never moves.
+    assert!(start.rgba() == frame(&note(true), SCROLL_DELAY).rgba());
+    assert!(start.rgba() != middle.rgba());
+    assert!(middle.rgba() == frame(&note(true), time).rgba());
+    assert!(frame(&note(false), time).rgba() == frame(&note(false), Duration::ZERO).rgba());
+
+    // The user's layout: a 184 px voice widget and a 216 px call widget.
+    let mut live = preview::sample_live(Locale::Fr);
+    let discord = live.discord.as_mut().unwrap();
+    discord.guilds.get_mut("1").unwrap()[0].name = "Salon avec un nom vraiment très long".into();
+    discord.self_id = Some("11".into());
+    discord.focus = Some("11".into());
+    let page = Page {
+        id: "voice".into(),
+        name: "Voice".into(),
+        hidden: false,
+        auto_return_seconds: None,
+        background: None,
+        widgets: vec![
+            Widget::new(
+                "voice",
+                0,
+                184,
+                WidgetKind::DiscordVoice(DiscordVoiceProps::default()),
+            ),
+            Widget::new(
+                "call",
+                184,
+                216,
+                WidgetKind::DiscordCall(DiscordCallProps::default()),
+            ),
+        ],
+    };
+    snapshot(
+        "discord-narrow-page-0",
+        &render_page(&page, &theme, &live, &ui()),
+    );
+    let discord = live.discord.as_mut().unwrap();
+    discord.rotation = 1;
+    discord.focus = Some("12".into());
+    snapshot(
+        "discord-narrow-page-1",
+        &render_page(&page, &theme, &live, &ui()),
+    );
 }
 
 #[test]

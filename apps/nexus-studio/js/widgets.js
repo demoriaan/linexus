@@ -3,7 +3,7 @@ import { metricsCatalog } from "./lib/store.js";
 // What Studio knows about each widget type: how it looks in the library,
 // its default size and props, and which fields the inspector shows.
 // Field kinds: text, number, select, toggle, icon, metric, location, entity,
-// feeds, image, args.
+// feeds, image, args, discord_guild.
 
 export const WIDGETS = {
   clock: {
@@ -47,7 +47,10 @@ export const WIDGETS = {
     icon: "volume-2",
     w: 160,
     props: { show_value: true, step: 5 },
-    fields: [{ key: "show_value", kind: "toggle" }],
+    fields: [
+      { key: "source", kind: "select", options: ["system", "discord_input", "discord_output"] },
+      { key: "show_value", kind: "toggle" },
+    ],
   },
   button: {
     icon: "pointer",
@@ -134,12 +137,30 @@ export const WIDGETS = {
       { key: "label", kind: "text", optional: true },
     ],
   },
+  discord_voice: {
+    icon: "headphones",
+    w: 320,
+    props: { show_empty: false },
+    fields: [
+      { key: "guild_id", kind: "discord_guild" },
+      { key: "show_empty", kind: "toggle" },
+    ],
+  },
+  discord_call: {
+    icon: "phone",
+    w: 320,
+    props: { show_names: true, show_ping: true },
+    fields: [
+      { key: "show_names", kind: "toggle" },
+      { key: "show_ping", kind: "toggle" },
+    ],
+  },
   spacer: { icon: "move-horizontal", w: 40, props: {}, fields: [] },
 };
 
 export const WIDGET_ORDER = [
   "button", "clock", "metric", "network", "media", "volume", "news",
-  "weather", "entity", "timer", "text", "image", "command", "spacer",
+  "weather", "entity", "timer", "discord_voice", "discord_call", "text", "image", "command", "spacer",
 ];
 
 /** Built-in behaviour per type when no tap/double-tap/hold action is set. */
@@ -149,6 +170,8 @@ export const BUILTIN = {
   news: { tap: "builtin.news.tap", double_tap: "builtin.news.double", hold: "builtin.news.hold" },
   timer: { tap: "builtin.timer.tap", double_tap: "builtin.timer.double", hold: "builtin.timer.hold" },
   entity: { tap: "builtin.entity.tap" },
+  discord_voice: { tap: "builtin.discord_voice.tap" },
+  discord_call: { tap: "builtin.discord_call.tap" },
 };
 
 export function newWidget(type, id, x, w) {
@@ -167,6 +190,8 @@ export function widgetTitle(widget, t) {
       return widget.label || widget.entity_id || t("widget.entity");
     case "text":
       return widget.text || t("widget.text");
+    case "discord_voice":
+      return widget.guild_name || t("widget.discord_voice");
     default:
       return t(`widget.${widget.type}`);
   }

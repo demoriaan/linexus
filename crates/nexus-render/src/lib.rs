@@ -15,7 +15,10 @@ pub use canvas::{Bounds, Canvas};
 pub use live::*;
 pub use text::{FontFace, TextStyle};
 pub use theme::{Palette, PRESETS};
-pub use widgets::{media_zone, news, volume_fraction_at, weather_key, MediaZone};
+pub use widgets::{
+    discord_call_hit, discord_channel_at, media_zone, news, volume_fraction_at, weather_key,
+    CallHit, MediaZone,
+};
 
 use nexus_config::{HexColor, ImageFit, Page, Theme};
 
@@ -92,8 +95,32 @@ pub fn render_page(page: &Page, theme: &Theme, live: &LiveData, ui: &UiState) ->
     for widget in &page.widgets {
         widgets::draw(&mut canvas, widget, &ctx);
     }
+    if let Some(discord) = live.discord.as_ref().filter(|d| d.mute_badge) {
+        draw_mute_badge(&mut canvas, discord);
+    }
     draw_page_indicator(&mut canvas, ui, &palette);
     canvas
+}
+
+/// A red pill in the top right corner while you sit muted or deafened in
+/// a voice channel, so you do not talk into the void.
+fn draw_mute_badge(canvas: &mut Canvas, discord: &DiscordInfo) {
+    let pill = Bounds::new(WIDTH as f32 - 33.0, 3.0, 30.0, 17.0);
+    canvas.round_rect(pill.inset(-1.0, -1.0), 9.5, Rgb::hex(0x000000), 0.35);
+    canvas.round_rect(pill, 8.5, Rgb::hex(0xf23f43), 1.0);
+    let icon = if discord.self_deafened {
+        "headphone-off"
+    } else {
+        "mic-off"
+    };
+    canvas.icon(
+        icon,
+        pill.center_x() - 6.0,
+        pill.y + 2.5,
+        12.0,
+        Rgb::hex(0xffffff),
+        1.0,
+    );
 }
 
 fn draw_background(canvas: &mut Canvas, page: &Page, palette: &Palette) {
@@ -206,6 +233,34 @@ pub fn calibration_frame(
     canvas
 }
 
+/// A long notification waits this long before its text starts scrolling.
+pub const SCROLL_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+/// It stays this long after the end of its text came into view.
+pub const SCROLL_HOLD: std::time::Duration = std::time::Duration::from_secs(3);
+/// Scrolling speed of a long notification, in pixels per second.
+const SCROLL_SPEED: f32 = 40.0;
+const BODY_X: f32 = 54.0;
+const BODY_W: f32 = WIDTH as f32 - 66.0;
+
+fn body_style(color: Rgb) -> TextStyle {
+    TextStyle::new(FontFace::Medium, 14.0, color)
+}
+
+/// How far a notification body runs past its line, in pixels.
+fn body_overflow(body: &str) -> f32 {
+    let style = body_style(Rgb::default());
+    (text::measure(&text::printable(body, style.face), &style) - BODY_W).max(0.0)
+}
+
+/// How long a notification whose body scrolls should stay up: the wait,
+/// the scroll and the hold at the end. None when the body fits its line.
+pub fn notification_scroll_time(body: &str) -> Option<std::time::Duration> {
+    let overflow = body_overflow(body);
+    (overflow > 0.0).then(|| {
+        SCROLL_DELAY + std::time::Duration::from_secs_f32(overflow / SCROLL_SPEED) + SCROLL_HOLD
+    })
+}
+
 /// Draws a transient overlay. `visibility` (0..=1) drives a slide-in from
 /// the top edge.
 pub fn draw_overlay(
@@ -214,6 +269,26 @@ pub fn draw_overlay(
     theme: &Theme,
     live: &LiveData,
     visibility: f32,
+) {
+    draw_overlay_at(
+        canvas,
+        overlay,
+        theme,
+        live,
+        visibility,
+        std::time::Duration::ZERO,
+    );
+}
+
+/// Like [`draw_overlay`], `shown` after the overlay appeared: a long
+/// notification scrolls by then.
+pub fn draw_overlay_at(
+    canvas: &mut Canvas,
+    overlay: &Overlay,
+    theme: &Theme,
+    live: &LiveData,
+    visibility: f32,
+    shown: std::time::Duration,
 ) {
     let palette = Palette::for_theme(theme);
     let t = ease_out_cubic(visibility.clamp(0.0, 1.0));
@@ -235,6 +310,8 @@ pub fn draw_overlay(
             title,
             body,
             icon,
+            scroll,
+            ..
         } => {
             match icon {
                 Some(image) => icons::draw_image_icon(canvas, image, 12.0, y + 8.0, 30.0, 1.0),
@@ -251,9 +328,18 @@ pub fn draw_overlay(
                 &title_style,
                 WIDTH as f32 - 70.0 - app_w,
             );
-            let body_style = TextStyle::new(FontFace::Medium, 14.0, palette.text_soft);
+            let body_style = body_style(palette.text_soft);
             let line = text::printable(body, body_style.face);
-            canvas.text_fit(54.0, y + 37.0, &line, &body_style, WIDTH as f32 - 66.0);
+            let overflow = if *scroll { body_overflow(body) } else { 0.0 };
+            if overflow > 0.0 {
+                let travelled = shown.saturating_sub(SCROLL_DELAY).as_secs_f32() * SCROLL_SPEED;
+                let offset = travelled.min(overflow);
+                let clip = canvas.clip_x(BODY_X, BODY_X + BODY_W);
+                canvas.text(BODY_X - offset, y + 37.0, &line, &body_style);
+                canvas.set_clip(clip);
+            } else {
+                canvas.text_fit(BODY_X, y + 37.0, &line, &body_style, BODY_W);
+            }
         }
         Overlay::Volume(volume) => {
             let icon = if volume.muted { "volume-x" } else { "volume-2" };

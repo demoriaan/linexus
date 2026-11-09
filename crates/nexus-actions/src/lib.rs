@@ -390,7 +390,45 @@ fn send_input_helper(path: &Path, command: nexus_input::InputCommand) -> Result<
         .map_err(|error| ActionError::InputHelper(error.to_string()))
 }
 
+/// A link into the Discord app, such as a tapped Discord notification
+/// opens: `discord://-/channels/<server or @me>/<channel>[/<message>]`.
+pub fn is_discord_link(url: &str) -> bool {
+    url.strip_prefix("discord://-/channels/")
+        .is_some_and(|rest| {
+            let parts: Vec<&str> = rest.split('/').collect();
+            (2..=3).contains(&parts.len())
+                && parts.iter().enumerate().all(|(i, part)| {
+                    (i == 0 && *part == "@me")
+                        || (!part.is_empty()
+                            && part.len() <= 20
+                            && part.bytes().all(|b| b.is_ascii_digit()))
+                })
+        })
+}
+
 fn plan_open_url(url: &str, status: &BackendStatus) -> Result<PlannedCommand> {
+    // Discord registers its own handler; the browser is not involved.
+    if is_discord_link(url) {
+        let planned = status
+            .xdg_open
+            .as_ref()
+            .map(|program| (program.clone(), vec![url.to_string()]))
+            .or_else(|| {
+                status
+                    .kioclient
+                    .as_ref()
+                    .map(|program| (program.clone(), vec!["exec".into(), url.to_string()]))
+            });
+        return match planned {
+            Some((program, args)) => Ok(PlannedCommand {
+                program,
+                args,
+                wait: false,
+                timeout: None,
+            }),
+            None => Err(ActionError::MissingBackend("xdg-open or kioclient")),
+        };
+    }
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err(ActionError::InvalidAction(
             "open-url currently accepts only http:// or https:// URLs".into(),
@@ -1081,6 +1119,28 @@ mod tests {
     fn rejects_non_http_urls_for_now() {
         let err = plan_action(&Action::OpenUrl("file:///tmp/x".into()), &status()).unwrap_err();
         assert!(matches!(err, ActionError::InvalidAction(_)));
+    }
+
+    #[test]
+    fn opens_discord_links_with_the_system_handler() {
+        assert!(is_discord_link("discord://-/channels/@me/123"));
+        assert!(is_discord_link("discord://-/channels/1/2/3"));
+        for bad in [
+            "discord://-/channels/1",
+            "discord://-/channels/1/2/3/4",
+            "discord://-/channels/1/@me",
+            "discord://-/channels/1/../2",
+            "discord://evil",
+        ] {
+            assert!(!is_discord_link(bad), "{bad}");
+            assert!(plan_action(&Action::OpenUrl(bad.into()), &status()).is_err());
+        }
+        let planned = plan_action(
+            &Action::OpenUrl("discord://-/channels/@me/123".into()),
+            &status(),
+        )
+        .unwrap();
+        assert_eq!(planned.args, vec!["discord://-/channels/@me/123"]);
     }
 
     #[test]

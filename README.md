@@ -75,6 +75,12 @@ Record, pause, stream, switch scenes, mute audio sources, save replay clips and 
 
 <img src="docs/images/studio-obs.webp" alt="The OBS Studio connection in Studio: computer, port and password, and the result of the test: connected to OBS 32.2.2, four scenes found" width="628">
 
+### Discord
+
+See who sits in your server's voice channels, with their profile pictures and a green ring around whoever speaks, and tap a channel to join it. A second widget shows the channel you are in with the connection's ping; tap someone to mute them for you or change their volume. Buttons mute your microphone, deafen you, talk while held, join a channel or leave voice, step your microphone or Discord's sound, and toggle noise suppression, echo cancellation, automatic gain or push to talk; a slider sets either level. Discord's message notifications show on the strip with the author's picture, and a tap opens the conversation. A red badge reminds you while you sit muted, and a profile can come up by itself while you are in voice. Linexus talks to the official Discord app on your computer; you connect it once in Studio with a Discord application of your own, which Discord requires for this kind of remote control. Vesktop and other clients built on arRPC cannot be controlled this way.
+
+![Two Discord pages on the strip: the call you are in, with its 42 ms ping, Nina speaking and Sam muted, mute and deafen buttons and Discord's sound level; below, the server's voice channels Gaming, Chill and AFK with their members, a leave button and the microphone level](docs/images/strip-discord.webp)
+
 ### Desktop notifications
 
 Notifications slide over the current page for a few seconds, with the app's icon or the picture they carry. They come from any app, GNOME and Flatpak apps included, and follow your desktop: during Do Not Disturb only urgent ones appear, and apps whose pop-ups you turned off stay off the strip too. A touch dismisses them. Turn them on under Connections in Studio.
@@ -95,7 +101,7 @@ Text with live values such as `{cpu.temp}`, `{gpu.power}` or `{obs.scene}`, your
 
 ### Touch gestures
 
-Each widget has its own action for a tap, a double tap and a hold, and a held button can repeat like a held key. Swipe to change pages: the page follows your finger and slides or fades into the next one. Pages you hide from swiping work like folders that a button opens.
+Each widget has its own action for a tap, a double tap and a hold, and a held button can repeat like a held key. Swipe to change pages: the page follows your finger and slides or fades into the next one. Pages you hide from swiping work like folders that a button opens. If taps land beside your finger, Studio calibrates the strip: touch the marks it shows, click Apply, and it corrects the panel from then on.
 
 <img src="docs/images/studio-touch.webp" alt="The Touch panel of a button in Studio: tap launches the web browser, double tap opens a website, hold presses Ctrl+Shift+T" width="100%">
 
@@ -124,6 +130,10 @@ Midnight, Aurora, Ember, Neon, Mono and Daylight, each with an accent colour of 
 
 ![The same page in the six themes, from top to bottom: Midnight, Aurora, Ember, Neon, Mono and Daylight](docs/images/strip-themes.webp)
 
+### English, German and French
+
+The strip and Studio speak English, German and French: dates, weather, timers and every widget's words on the strip, and the whole of Studio. Studio follows your browser's language until you pick one under Settings.
+
 ## Linexus Studio
 
 Studio opens in your browser at `http://127.0.0.1:19777/` and edits the configuration the daemon reads. Every change shows on the strip at once.
@@ -136,7 +146,7 @@ Studio opens in your browser at `http://127.0.0.1:19777/` and edits the configur
 - Drag widgets from the library onto the strip, move and resize them on an 8 px grid, and set what each gesture does.
 - Changes save automatically. When the profile you edit is on the strip, the strip jumps to the page you are editing. Undo and redo keep your last 200 steps.
 - A live mirror shows what the strip shows right now; clicking or dragging on it acts like a touch on the strip.
-- Page templates, page backgrounds, English and German, light and dark mode.
+- Page templates, page backgrounds, English, German and French, light and dark mode.
 
 <table>
 <tr>
@@ -163,7 +173,7 @@ Studio checks device access, the services and the helper programs, and gives the
 
 ### Backups you can share
 
-Export all profiles, pages and images as one `.nexuspack` file and import it on another computer. Before an import replaces anything, Studio lists the buttons that run programs, type text or press keys, send web requests, open apps, files or links, call Home Assistant or control OBS, so you know what you bring in.
+Export all profiles, pages and images as one `.nexuspack` file and import it on another computer. Before an import replaces anything, Studio lists the buttons that run programs, type text or press keys, send web requests, open apps, files or links, call Home Assistant or control OBS or Discord, so you know what you bring in.
 
 <img src="docs/images/studio-import.webp" alt="The import dialog for a backup: three profiles, twelve pages and one image, a notice that some buttons act outside the strip, and the first of those buttons grouped by what they do" width="100%">
 

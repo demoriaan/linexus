@@ -75,6 +75,7 @@ All fields are optional.
 | `weather` | location or `null` | `null` | Default place for weather widgets: `{"name": "Berlin", "latitude": 52.52, "longitude": 13.405}` |
 | `notifications` | object | see below | Desktop notifications on the strip |
 | `overlays` | object | see below | Short pop-ups for volume and track changes |
+| `discord` | object | see below | Discord's notifications and the muted badge |
 | `touch` | object | see below | Correction for a touch panel that reads touches beside the finger |
 
 `idle`:
@@ -124,6 +125,14 @@ Both stay within ±100. The daemon corrects the strip's own touches only; taps f
 
 Studio → Device → Calibrate measures it: the strip shows five marks across its width, twice, one after the other, and you touch the center of each. A touch more than 70 px from its mark does not count and the mark stays. A line fitted through the ten touches gives both values, which Studio shows to apply or discard; values under 10 px at both edges are within normal finger accuracy and count as no correction. A calibration fails when one touch lies more than 30 px off the fitted line, when the touches stretch the strip by more than 25 %, or when the marks are missed for 30 seconds; with no touch for 30 seconds it is cancelled. By hand, `linexusctl touch` prints what the panel reports while `linexusctl demo --pattern border-grid` shows lines every 100 px (stop the daemon first).
 
+`discord` (needs Discord connected in Studio, see [`discord`](#discord)):
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `notifications` | boolean | `true` | Show the message notifications Discord shows, with the author's picture; a tap opens the conversation in Discord. Discord's own notification settings decide which messages notify. Needs `notifications.enabled`. `notifications.duration_ms`, `notifications.private` (which also hides the author's picture) and `notifications.muted_apps` apply, and so does do not disturb on the desktop. While they arrive this way, a desktop notification repeating one of these messages is left out. |
+| `scroll` | `"direct"`, `"all"`, `"never"` | `"direct"` | Which notifications too long for their line scroll to the end: they wait 2 seconds, scroll, stay 3 more seconds and go (at most 30 seconds in all). `direct`: direct and group messages only, server messages show their beginning. |
+| `mute_indicator` | boolean | `true` | While you sit muted or deafened in a voice channel, a red badge in the top right corner of every page says so; left out on pages that already show it (a mute, deafen or push-to-talk button, a `discord_call` widget or a Discord volume slider) |
+
 ## Profiles
 
 A profile is a set of pages with its own look and brightness.
@@ -136,6 +145,7 @@ A profile is a set of pages with its own look and brightness.
 | `theme` | object | no | `{"preset": "midnight"}` by default |
 | `pages` | array | yes | At least one page must not be hidden |
 | `apps` | array of strings | no | Applications that switch to this profile while they have focus |
+| `discord_voice` | boolean | no | Switch to this profile while you sit in a Discord voice channel, and back to the previous one when you leave (unless you switched profiles in between). The first profile with it wins. |
 
 `theme`:
 
@@ -246,8 +256,9 @@ Built-in tap: the buttons skip back, play or pause, and skip forward; tapping th
 |---|---|---|
 | `show_value` | `true` | Show the percentage |
 | `step` | `5` | Accepted, but not used yet |
+| `source` | `"system"` | `system` (the default output), `discord_input` (Discord's microphone level, 0 to 100 %) or `discord_output` (Discord's output level, 0 to 200 %) |
 
-Built-in touch: slide along the bar to set the volume; tap the speaker icon to mute or unmute. Uses `wpctl`, or `pactl` when `wpctl` is missing.
+Built-in touch: slide along the bar to set the volume; tap the icon to mute or unmute (for `discord_output`: deafen). The system volume uses `wpctl`, or `pactl` when `wpctl` is missing.
 
 ### button
 
@@ -258,6 +269,8 @@ Built-in touch: slide along the bar to set the volume; tap the speaker icon to m
 | `style` | `"tile"` | `tile` (icon above the label), `inline` (icon and label side by side) or `icon` (icon only) |
 | `show_label` | `true` | Show the label |
 | `running_indicator` | `true` | For buttons whose tap action is `launch_app`: show a dot while that application runs |
+
+A button whose tap action is [`discord`](#discord) follows Discord: mute and deafen light up red while on (a `mic` or `headphones` icon is crossed out), a join button lights up while you are in its channel, a leave button fades while you are not in voice, push to talk lights up green while the microphone is open, volume buttons show the level in place of the label, and the voice mode and audio processing toggles light up while on. All of them fade while Discord is not connected.
 
 A button whose tap action is [`obs`](#obs) shows what OBS is doing: a recording or stream lights up red with its running time in place of the label (amber while a recording is paused or a stream reconnects), the scene on air and an active replay buffer or virtual camera light up in the accent colour, and a muted source lights up red (a `mic` or `volume` icon is crossed out). While OBS is not connected, and where the button has nothing to act on (pause without a recording, a replay clip without a replay buffer), it is faded.
 
@@ -292,6 +305,29 @@ A Home Assistant light or switch. Needs the Home Assistant connection set up in 
 | `icon` | not set | Lucide icon, for example `lucide:lamp-desk`; an icon matching the entity's domain when not set |
 
 Built-in tap: toggles the entity.
+
+### discord_voice
+
+Who sits in the voice channels of a Discord server, with their profile pictures: one tile per channel, the channel you are in first and lit up, a green ring around whoever speaks and a red badge on muted or deafened members. A tile is as wide as its pictures, at least 56 px; longer channel names are cut. When the channels do not all fit, they take turns a page at a time every 5 seconds, with dots below; the turning waits while the strip was touched in the last 10 seconds. Needs Discord set up in Studio under Connections (see [`discord`](#discord)).
+
+| Field | Default | Meaning |
+|---|---|---|
+| `guild_id` | not set | Server id. Without one, the widget follows the server of the voice channel you are in. |
+| `guild_name` | not set | The server's name when it was picked in Studio; only for display in Studio |
+| `show_empty` | `false` | Also list channels nobody is in |
+
+Built-in tap: joins the voice channel you tap; on the channel you are already in, says so.
+
+### discord_call
+
+The voice channel you are in: its name and the voice connection's ping on the left (green signal under 100 ms, amber under 250 ms, red above), then everyone in it with their picture and name, a green ring around whoever speaks, and badges for muted, deafened and muted-for-you members. Says so when you are in no voice channel.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `show_names` | `true` | Names under the pictures |
+| `show_ping` | `true` | Ping and connection quality under the channel name |
+
+Built-in tap: tap someone to open their controls: mute them for you, quieter or louder in steps of 10 % (0 to 200 %), close. The controls close on their own after 8 seconds without a touch. These settings are yours only, as in Discord's own menu. Tapping yourself opens your microphone's controls instead (mute, quieter, louder, 0 to 100 %), since Discord sets no volume of yours for you.
 
 ### timer
 
@@ -481,6 +517,34 @@ Controls OBS Studio through its WebSocket server (OBS 28 or newer), using the co
 { "type": "obs", "command": "set_scene", "target": "Gameplay" }
 ```
 
+### discord
+
+Controls the Discord desktop app through its local RPC socket. Only a socket whose other end runs as your own user gets your token. The daemon connects while the active profile has Discord buttons, a [`discord_voice`](#discord_voice) or [`discord_call`](#discord_call) widget or a Discord volume slider, while a profile has `discord_voice`, or while `settings.discord` shows notifications or the muted badge.
+
+| `command` | Does |
+|---|---|
+| `toggle_mute` | Mutes or unmutes your microphone |
+| `toggle_deafen` | Deafens or undeafens you |
+| `push_to_talk` | Opens your microphone while the finger stays on the button and mutes it again on release; does nothing while you are not muted |
+| `join_voice` | Joins the voice channel whose id is in `channel`, leaving the one you are in |
+| `leave_voice` | Leaves voice |
+| `input_volume_up`, `input_volume_down` | Microphone level up or down by `step` percent (default 10), 0 to 100 % |
+| `output_volume_up`, `output_volume_down` | Discord's output level up or down by `step` percent (default 10), 0 to 200 % |
+| `toggle_voice_mode` | Switches between voice activity and push to talk |
+| `toggle_noise_suppression` | Turns noise suppression on or off |
+| `toggle_echo_cancellation` | Turns echo cancellation on or off |
+| `toggle_automatic_gain` | Turns automatic gain control on or off |
+
+```json
+{ "type": "discord", "command": "join_voice", "channel": "123456789012345678" }
+```
+
+Discord opens this socket only to applications it approved, and to up to 50 testers of others. Linexus therefore uses an application you create yourself in the [Discord developer portal](https://discord.com/developers/applications): add `http://localhost` under OAuth2 → Redirects (Discord refuses applications without a redirect, even though the local flow never opens it), paste the Client ID and Client Secret in Studio under Connections, click Connect and accept the prompt Discord shows. The secret and the tokens stay in `sensors.json` (mode 0600); the tokens never reach the browser, and the daemon renews them before they expire.
+
+Notifications need the `rpc.notifications.read` permission, which Linexus asks for since it shows them: connections made before need Connect clicked once more, and Studio says so. A tapped notification opens `discord://-/channels/…` with the desktop's handler for Discord links.
+
+Only the official Discord app (stable, PTB, Canary, also as Flatpak or Snap) offers voice control. Vesktop and other clients that use arRPC only share what you play; Studio says so when only such a client answers.
+
 ### next_page, previous_page
 
 Same as swiping. The older names `screen_next` and `screen_previous` are accepted.
@@ -617,6 +681,7 @@ A config is refused when any of these fails:
 - `volume` and `brightness` actions with `"command": "set"` have a `percent` of at most 100.
 - `idle.dim_percent` is at most 100, and hidden pages with `auto_return_seconds` wait at least 1 second.
 - `shell_command` actions and `command` widgets name a program without `/`.
+- `join_voice` Discord actions name a channel id (digits only), and a `discord_voice` widget's `guild_id`, when set, is digits only.
 - `http_request` URLs start with `http://` or `https://`, and `content_type` contains no line break.
 - Sequences nest at most one level deep, have at most 16 steps and wait at most 60 000 ms between steps.
 - Background `dim_percent` is at most 90.

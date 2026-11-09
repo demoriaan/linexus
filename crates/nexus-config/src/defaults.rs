@@ -29,6 +29,7 @@ pub fn default_config() -> NexusConfig {
                 template_page(PageTemplate::Focus, "focus"),
             ],
             apps: Vec::new(),
+            discord_voice: false,
         }],
     }
 }

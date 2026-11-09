@@ -4,6 +4,7 @@
 pub mod catalog;
 pub mod config;
 pub mod daemon;
+pub mod discord;
 pub mod obs;
 pub mod preview;
 pub mod sensors;
@@ -60,6 +61,7 @@ fn route_api(request: &Request, state: &AppState) -> Option<Response> {
         .or_else(|| daemon::route(request, state))
         .or_else(|| catalog::route(request, state))
         .or_else(|| obs::route(request))
+        .or_else(|| discord::route(request))
         .or_else(|| sensors::route(request))
         .or_else(|| system::route(request, state))
 }

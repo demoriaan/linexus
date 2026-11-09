@@ -3,6 +3,8 @@
 
 mod button;
 mod clock;
+mod discord;
+mod discord_call;
 mod entity;
 mod media;
 mod metric;
@@ -20,6 +22,8 @@ use crate::theme::Palette;
 use crate::Rgb;
 use nexus_config::{Widget, WidgetKind};
 
+pub use discord::discord_channel_at;
+pub use discord_call::{discord_call_hit, CallHit};
 pub use media::{media_zone, MediaZone};
 pub use volume::volume_fraction_at;
 pub use weather::weather_key;
@@ -82,6 +86,8 @@ pub fn draw(canvas: &mut Canvas, widget: &Widget, ctx: &Ctx) {
         WidgetKind::Text(props) => text::draw_text(canvas, bounds, widget, props, ctx),
         WidgetKind::Image(props) => text::draw_image(canvas, bounds, props),
         WidgetKind::Command(props) => text::draw_command(canvas, bounds, widget, props, ctx),
+        WidgetKind::DiscordVoice(props) => discord::draw(canvas, bounds, widget, props, ctx),
+        WidgetKind::DiscordCall(props) => discord_call::draw(canvas, bounds, widget, props, ctx),
         WidgetKind::Spacer => {}
     }
     canvas.unclip();

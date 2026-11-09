@@ -3,14 +3,14 @@ import { html, useEffect, useState } from "../lib/html.js";
 import { t } from "../lib/i18n.js";
 import { Icon } from "../lib/icons.js";
 import { profile, page, config } from "../lib/store.js";
-import { Field, TextInput, NumberInput, Select, AppField, EntityField, ArgsField, ObsField, defaultObsTarget, loadObsSources } from "./Fields.js";
+import { Field, TextInput, NumberInput, Select, AppField, EntityField, ArgsField, ObsField, defaultObsTarget, loadObsSources, DiscordChannelField, defaultDiscordChannel, loadDiscordGuilds } from "./Fields.js";
 
 export const ACTION_GROUPS = [
   ["open", ["launch_app", "open_url", "open_path"]],
   ["media", ["media", "volume", "microphone_mute"]],
   ["input", ["keyboard_shortcut", "text_input"]],
   ["strip", ["next_page", "previous_page", "go_to_page", "go_back", "switch_profile", "next_profile", "previous_profile", "brightness", "display_off"]],
-  ["system", ["lock_screen", "home_assistant", "obs", "http_request", "shell_command", "sequence"]],
+  ["system", ["lock_screen", "home_assistant", "obs", "discord", "http_request", "shell_command", "sequence"]],
 ];
 
 const OBS_COMMANDS = [
@@ -19,6 +19,14 @@ const OBS_COMMANDS = [
   "set_scene", "toggle_mute",
   "toggle_replay_buffer", "save_replay", "toggle_virtual_cam",
 ];
+const DISCORD_COMMANDS = [
+  "toggle_mute", "toggle_deafen", "push_to_talk", "join_voice", "leave_voice",
+  "input_volume_up", "input_volume_down", "output_volume_up", "output_volume_down",
+  "toggle_voice_mode", "toggle_noise_suppression", "toggle_echo_cancellation", "toggle_automatic_gain",
+];
+/** Discord commands that take a step in percent. */
+const DISCORD_STEPPED = ["input_volume_up", "input_volume_down", "output_volume_up", "output_volume_down"];
+
 /** Commands that name a scene or an audio source, and which list they pick from. */
 const OBS_TARGETS = { set_scene: "scenes", toggle_mute: "audio_inputs" };
 
@@ -35,6 +43,7 @@ const DEFAULTS = {
   http_request: { method: "POST", url: "https://" },
   home_assistant: { service: "light.toggle", entity_id: "" },
   obs: { command: "toggle_record" },
+  discord: { command: "toggle_mute" },
   brightness: { command: "cycle" },
   sequence: { steps: [], delay_ms: 0 },
 };
@@ -122,6 +131,8 @@ function ActionFields({ value, set, depth }) {
         <${Field} label=${t("action.ha.entity")}><${EntityField} value=${value.entity_id} onChange=${(entity_id) => set({ entity_id: entity_id || undefined })} /><//>`;
     case "obs":
       return html`<${ObsFields} value=${value} set=${set} />`;
+    case "discord":
+      return html`<${DiscordFields} value=${value} set=${set} />`;
     case "go_to_page":
       return html`<${Field} label=${t("action.page")}>
         <${Select} value=${value.page_id} options=${["", ...pages.map((p) => p.id)]} labelOf=${(id) => (id ? pages.find((p) => p.id === id)?.name ?? id : t("action.page.pick"))} onChange=${(page_id) => set({ page_id })} />
@@ -157,6 +168,28 @@ function ObsFields({ value, set }) {
     ${kind && html`<${Field} label=${t(kind === "scenes" ? "action.obs.scene" : "action.obs.source")}>
       <${ObsField} kind=${kind} value=${value.target} onChange=${(target) => set({ target: target || undefined })} />
     <//>`}`;
+}
+
+function DiscordFields({ value, set }) {
+  // Channels load while the command is being chosen, so a join button
+  // starts with a channel Discord knows.
+  useEffect(() => { loadDiscordGuilds().catch(() => null); }, []);
+  const choose = (command) => set({
+    command,
+    channel: command === "join_voice" ? defaultDiscordChannel() : undefined,
+    step: DISCORD_STEPPED.includes(command) ? value.step : undefined,
+  });
+  return html`
+    <${Field} label=${t("action.discord.command")}>
+      <${Select} value=${value.command} options=${DISCORD_COMMANDS} labelOf=${(o) => t(`discord.command.${o}`)} onChange=${choose} />
+    <//>
+    ${value.command === "join_voice" && html`<${Field} label=${t("action.discord.channel")}>
+      <${DiscordChannelField} value=${value.channel} onChange=${(channel) => set({ channel: channel || undefined })} />
+    <//>`}
+    ${DISCORD_STEPPED.includes(value.command) && html`<${Field} label=${t("action.discord.step")}>
+      <${NumberInput} value=${value.step} min=${1} max=${100} optional onInput=${(step) => set({ step: step ?? undefined })} />
+    <//>`}
+    ${value.command === "push_to_talk" && html`<small class="hint">${t("action.discord.push_to_talk.hint")}</small>`}`;
 }
 
 /** Steps per sequence the config allows. */

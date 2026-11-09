@@ -32,6 +32,7 @@ fn engine(runtime: Runtime, scratch: &Scratch) -> Engine {
         feedback,
         notifications: crate::notifications::Notifications::off(),
         obs: crate::obs::Obs::off(),
+        discord: crate::discord::Discord::off(),
         focus: crate::focus::Focus::off(),
         logger,
         state_path: None,
@@ -441,6 +442,55 @@ fn dragging_off_the_left_end_of_the_slider_still_commits() {
     assert!(!engine.scene.sliding());
 }
 
+/// Joining Discord voice brings up the profile that follows voice; leaving
+/// returns to the one before, unless the user switched in between.
+#[test]
+fn discord_voice_switches_to_its_profile_and_back() {
+    let scratch = Scratch::new("discord-voice");
+    let mut config = nexus_config::default_config();
+    let mut voice = config.profiles[0].clone();
+    voice.id = "voice".into();
+    voice.discord_voice = true;
+    let mut other = config.profiles[0].clone();
+    other.id = "other".into();
+    config.profiles.extend([voice, other]);
+    let mut engine = engine(Runtime::from_config(config, None), &scratch);
+    let t = Instant::now();
+
+    engine.follow_voice(true, t);
+    assert_eq!(engine.runtime.profile().id, "voice");
+    engine.follow_voice(true, t + ms(100));
+    assert_eq!(engine.runtime.profile().id, "voice");
+    engine.follow_voice(false, t + ms(200));
+    assert_eq!(engine.runtime.profile().id, "default");
+
+    engine.follow_voice(true, t + ms(300));
+    engine.switch_profile("other", t + ms(400)).unwrap();
+    engine.follow_voice(false, t + ms(500));
+    assert_eq!(engine.runtime.profile().id, "other");
+}
+
+/// A push-to-talk button does nothing on its own tap; without Discord it
+/// does not leave the engine thinking the microphone is open.
+#[test]
+fn push_to_talk_needs_discord() {
+    let scratch = Scratch::new("push-to-talk");
+    let mut config = nexus_config::default_config();
+    let talk = ActionSpec::Discord {
+        command: DiscordCommand::PushToTalk,
+        channel: None,
+        step: None,
+    };
+    config.profiles[0].pages[0].widgets = vec![button("talk", talk)];
+    let mut engine = engine(Runtime::from_config(config, None), &scratch);
+    let t = Instant::now();
+    engine.touch_event(TouchPhase::Began, 50, t);
+    assert!(!engine.talking);
+    engine.touch_event(TouchPhase::Ended, 50, t + ms(300));
+    engine.tick(t + ms(400));
+    assert!(!engine.talking);
+}
+
 /// Calibration takes over the strip: its touches measure the panel instead
 /// of reaching widgets, and Studio reads the result.
 #[test]
@@ -528,4 +578,58 @@ fn panel_touches_are_corrected_except_during_calibration() {
     engine.handle_request(Command::Tap { x: 180 }, t + ms(2_200));
     assert_eq!(engine.calibration.as_ref().unwrap().step(), 1);
     assert_eq!(engine.runtime.brightness, 90);
+}
+
+fn discord_message() -> crate::discord::DiscordNotification {
+    crate::discord::DiscordNotification {
+        title: "Ada".into(),
+        body: "see you at eight".into(),
+        icon: None,
+        link: None,
+        direct: true,
+    }
+}
+
+fn shown_discord_message(configure: impl FnOnce(&mut nexus_config::Settings)) -> Option<Overlay> {
+    let scratch = Scratch::new("discord-notification");
+    let mut config = nexus_config::default_config();
+    configure(&mut config.settings);
+    let mut engine = engine(Runtime::from_config(config, None), &scratch);
+    engine.discord.inject_notification(discord_message());
+    engine.tick(Instant::now());
+    engine.scene.overlay().cloned()
+}
+
+#[test]
+fn discord_messages_follow_the_notification_settings() {
+    assert!(shown_discord_message(|_| {}).is_none(), "off by default");
+    let on = |settings: &mut nexus_config::Settings| settings.notifications.enabled = true;
+    match shown_discord_message(on) {
+        Some(Overlay::Notification { title, body, .. }) => {
+            assert_eq!((title.as_str(), body.as_str()), ("Ada", "see you at eight"));
+        }
+        other => panic!("expected the message, got {other:?}"),
+    }
+    assert!(shown_discord_message(|settings| {
+        on(settings);
+        settings.notifications.muted_apps = vec![" discord ".into()];
+    })
+    .is_none());
+    assert!(shown_discord_message(|settings| {
+        on(settings);
+        settings.discord.notifications = false;
+    })
+    .is_none());
+    match shown_discord_message(|settings| {
+        on(settings);
+        settings.notifications.private = true;
+    }) {
+        Some(Overlay::Notification {
+            title, body, icon, ..
+        }) => {
+            assert_eq!((title.as_str(), body.as_str()), ("Discord", ""));
+            assert!(icon.is_none());
+        }
+        other => panic!("expected the private message, got {other:?}"),
+    }
 }

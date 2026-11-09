@@ -29,10 +29,38 @@ pub(crate) fn http_request(
     body: Option<&str>,
     timeout: Duration,
 ) -> Result<HttpResponse, String> {
+    let config = curl_header_config(headers)?;
+    send(method, url, config, body, timeout)
+}
+
+/// POSTs an `application/x-www-form-urlencoded` body that holds secrets
+/// (an OAuth client secret, a refresh token). The body travels to curl on
+/// stdin with the rest of its config, never in argv.
+pub(crate) fn http_post_private_form(
+    url: &str,
+    fields: &[(&str, &str)],
+    timeout: Duration,
+) -> Result<HttpResponse, String> {
+    let body = fields
+        .iter()
+        .map(|(key, value)| format!("{}={}", encode_query_value(key), encode_query_value(value)))
+        .collect::<Vec<_>>()
+        .join("&");
+    // Percent-encoding leaves no quote, backslash or line break to escape.
+    let config = format!("data-binary = \"{body}\"\n");
+    send("POST", url, config, None, timeout)
+}
+
+fn send(
+    method: &str,
+    url: &str,
+    config: String,
+    body: Option<&str>,
+    timeout: Duration,
+) -> Result<HttpResponse, String> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err(format!("{url} is not an http(s) address"));
     }
-    let config = curl_header_config(headers)?;
     let max_time = timeout.as_secs().max(1).to_string();
     let mut command = Command::new("curl");
     command.args([
@@ -178,6 +206,16 @@ mod tests {
         let config = curl_header_config(&["Authorization: Bearer a\"b\\c".into()]).unwrap();
         assert_eq!(config, "header = \"Authorization: Bearer a\\\"b\\\\c\"\n");
         assert!(curl_header_config(&["X: a\nurl = file:///etc/passwd".into()]).is_err());
+    }
+
+    #[test]
+    fn private_forms_refuse_non_http_urls() {
+        assert!(http_post_private_form(
+            "file:///etc/passwd",
+            &[("client_secret", "s\"e\ncret")],
+            Duration::from_secs(1)
+        )
+        .is_err());
     }
 
     #[test]

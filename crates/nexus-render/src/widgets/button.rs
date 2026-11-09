@@ -4,7 +4,7 @@ use crate::format;
 use crate::icons;
 use crate::text::{self, FontFace, TextStyle};
 use crate::{ObsInfo, Rgb};
-use nexus_config::{ActionSpec, ButtonProps, ButtonStyle, ObsCommand, Widget};
+use nexus_config::{ActionSpec, ButtonProps, ButtonStyle, DiscordCommand, ObsCommand, Widget};
 
 pub fn draw(canvas: &mut Canvas, b: Bounds, widget: &Widget, props: &ButtonProps, ctx: &Ctx) {
     let palette = ctx.palette;
@@ -13,7 +13,7 @@ pub fn draw(canvas: &mut Canvas, b: Bounds, widget: &Widget, props: &ButtonProps
     let running = props.running_indicator
         && launch_target(widget).is_some_and(|t| ctx.live.running.contains(t));
     let tile = b.inset(3.0, 3.0);
-    let look = obs_look(widget, ctx);
+    let look = obs_look(widget, ctx).or_else(|| discord_look(widget, ctx));
     let lit = look.as_ref().and_then(|look| look.lit);
     if let Some(color) = lit {
         accent = color;
@@ -181,6 +181,64 @@ fn obs_look(widget: &Widget, ctx: &Ctx) -> Option<ObsLook> {
             ..ObsLook::default()
         },
         ObsCommand::ToggleVirtualCam => on(obs.virtual_cam, palette.accent),
+    })
+}
+
+/// A Discord button: mute and deafen light up while on, join lights up
+/// while you are in that channel; all fade while Discord is not connected.
+fn discord_look(widget: &Widget, ctx: &Ctx) -> Option<ObsLook> {
+    let Some(ActionSpec::Discord {
+        command, channel, ..
+    }) = widget.tap.as_ref()
+    else {
+        return None;
+    };
+    let Some(discord) = ctx.live.discord.as_ref() else {
+        return Some(ObsLook {
+            idle: true,
+            ..ObsLook::default()
+        });
+    };
+    let palette = ctx.palette;
+    let on = |active: bool, color: Rgb| ObsLook {
+        lit: active.then_some(color),
+        ..ObsLook::default()
+    };
+    let accent = ctx.accent(widget, palette.accent);
+    Some(match command {
+        DiscordCommand::ToggleMute => ObsLook {
+            icon: discord.self_muted.then(|| muted_icon(widget)).flatten(),
+            ..on(discord.self_muted, palette.critical)
+        },
+        DiscordCommand::ToggleDeafen => ObsLook {
+            icon: discord.self_deafened.then_some("lucide:headphone-off"),
+            ..on(discord.self_deafened, palette.critical)
+        },
+        DiscordCommand::JoinVoice => on(channel.is_some() && discord.channel == *channel, accent),
+        DiscordCommand::LeaveVoice => ObsLook {
+            idle: discord.channel.is_none(),
+            ..ObsLook::default()
+        },
+        // Lit green while the microphone is open.
+        DiscordCommand::PushToTalk => ObsLook {
+            idle: discord.channel.is_none(),
+            ..on(
+                discord.channel.is_some() && !discord.self_muted,
+                Rgb::hex(0x23a55a),
+            )
+        },
+        DiscordCommand::InputVolumeUp | DiscordCommand::InputVolumeDown => ObsLook {
+            label: Some(format!("{} %", discord.input_volume)),
+            ..ObsLook::default()
+        },
+        DiscordCommand::OutputVolumeUp | DiscordCommand::OutputVolumeDown => ObsLook {
+            label: Some(format!("{} %", discord.output_volume)),
+            ..ObsLook::default()
+        },
+        DiscordCommand::ToggleVoiceMode => on(discord.push_to_talk, accent),
+        DiscordCommand::ToggleNoiseSuppression => on(discord.noise_suppression, accent),
+        DiscordCommand::ToggleEchoCancellation => on(discord.echo_cancellation, accent),
+        DiscordCommand::ToggleAutomaticGain => on(discord.automatic_gain, accent),
     })
 }
 

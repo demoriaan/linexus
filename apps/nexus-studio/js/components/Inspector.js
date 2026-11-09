@@ -11,7 +11,7 @@ import { WIDGETS, BUILTIN, widgetTitle } from "../widgets.js";
 import { ConfirmButton, Switch, Dialog } from "./Dialog.js";
 import {
   Field, TextInput, NumberInput, Select, IconField, MetricField, LocationField, EntityField,
-  ImageField, ArgsField, AppList, useApps,
+  ImageField, ArgsField, AppList, useApps, DiscordGuildField,
 } from "./Fields.js";
 import { ActionEditor } from "./ActionEditor.js";
 import { api } from "../lib/api.js";
@@ -116,6 +116,11 @@ function PropField({ field, w }) {
       return html`<${Field} label=${label} hint=${t("prop.args.hint")}><${ArgsField} value=${value} onChange=${set} /><//>`;
     case "feeds":
       return html`<${FeedsField} value=${value ?? []} onChange=${set} label=${label} />`;
+    case "discord_guild":
+      return html`<${Field} label=${label} hint=${t("prop.discord_voice.guild_id.hint")}>
+        <${DiscordGuildField} value=${value} name=${w.guild_name}
+          onChange=${(guild_id, guild_name) => editWidget({ guild_id, guild_name }, `guild:${w.id}`)} />
+      <//>`;
     default:
       return null;
   }
@@ -247,6 +252,19 @@ function ProfileStyle() {
       </div>
       <${AccentField} label=${t("profile.accent")} value=${theme.accent} onChange=${(accent) => setTheme({ accent })} />
       <${AutoApps} />
+      <div class="field inline">
+        <span>${t("profile.discord_voice")}</span>
+        <${Switch} ariaLabel=${t("profile.discord_voice")} checked=${!!prof.discord_voice}
+          onChange=${(on) => edit((draft) => {
+            const p = draft.profiles[profileIndex(draft)];
+            if (on) {
+              // One profile follows voice; the switch moves it here.
+              for (const other of draft.profiles) delete other.discord_voice;
+              p.discord_voice = true;
+            } else delete p.discord_voice;
+          })} />
+      </div>
+      <small class="hint" style=${{ marginTop: "-8px" }}>${t("profile.discord_voice.hint")}</small>
       <${Field} label=${t("profile.brightness", { n: prof.brightness })}>
         <input type="range" min="5" max="100" step="5" value=${prof.brightness}
           onInput=${(e) => {

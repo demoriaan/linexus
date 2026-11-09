@@ -110,7 +110,7 @@ fn config() -> Response {
         "ok": true,
         "path": sensor_config_path(),
         "feed_titles": nexus_sensors::cached_feed_titles(&config.rss),
-        "config": config,
+        "config": public_config(&config),
         "webhook_records": nexus_sensors::list_webhook_records(),
         "rss_seen_count": nexus_sensors::load_rss_seen_state().seen.len(),
     });
@@ -144,10 +144,34 @@ fn stored_sensor_json() -> Value {
         .unwrap_or(Value::Null)
 }
 
+/// sensors.json as the browser sees it: Discord's client secret and OAuth
+/// tokens stay on disk, only who authorized and until when is shown.
+pub(crate) fn public_config(config: &nexus_sensors::SensorConfig) -> Value {
+    let mut value = serde_json::to_value(config).unwrap_or(Value::Null);
+    if let Some(discord) = value.get_mut("discord").and_then(Value::as_object_mut) {
+        discord.remove("client_secret");
+        if let Some(token) = discord.get_mut("token").and_then(Value::as_object_mut) {
+            token.remove("access_token");
+            token.remove("refresh_token");
+        }
+    }
+    value
+}
+
 fn preserve_fields(incoming: &mut Value, stored: &Value) {
     let (Some(incoming), Some(stored)) = (incoming.as_object_mut(), stored.as_object()) else {
         return;
     };
+    // Discord is only changed through /api/discord: what the browser has is
+    // the redacted copy, which must not replace the stored tokens.
+    match stored.get("discord") {
+        Some(discord) => {
+            incoming.insert("discord".to_string(), discord.clone());
+        }
+        None => {
+            incoming.remove("discord");
+        }
+    }
     for key in PRESERVED_FIELDS {
         if let (false, Some(value)) = (incoming.contains_key(key), stored.get(key)) {
             incoming.insert(key.to_string(), value.clone());
@@ -158,7 +182,7 @@ fn preserve_fields(incoming: &mut Value, stored: &Value) {
 fn saved(config: nexus_sensors::SensorConfig, message: &str) -> Response {
     Response::json(
         200,
-        &json!({ "ok": true, "path": sensor_config_path(), "config": config, "message": message }),
+        &json!({ "ok": true, "path": sensor_config_path(), "config": public_config(&config), "message": message }),
     )
 }
 
@@ -458,5 +482,38 @@ mod tests {
                 String::from_utf8_lossy(body)
             );
         }
+    }
+
+    #[test]
+    fn discord_tokens_never_reach_the_page_or_get_replaced_by_it() {
+        let config = nexus_sensors::SensorConfig {
+            discord: Some(nexus_sensors::DiscordApp {
+                client_id: "42".into(),
+                client_secret: "secret".into(),
+                token: Some(nexus_sensors::DiscordToken {
+                    access_token: "access".into(),
+                    refresh_token: "refresh".into(),
+                    expires_at: 1,
+                    user: "Axel".into(),
+                    scopes: Vec::new(),
+                }),
+            }),
+            ..nexus_sensors::SensorConfig::default()
+        };
+        let public = public_config(&config);
+        assert_eq!(
+            public["discord"]["token"],
+            json!({ "expires_at": 1, "user": "Axel" })
+        );
+        assert!(public["discord"].get("client_secret").is_none());
+        let stored = serde_json::to_value(&config).unwrap();
+        // The page sends back its redacted copy, or a forged one.
+        let mut incoming = public.clone();
+        incoming["discord"]["client_id"] = "666".into();
+        preserve_fields(&mut incoming, &stored);
+        assert_eq!(incoming["discord"], stored["discord"]);
+        let mut without = json!({ "discord": { "client_id": "1" } });
+        preserve_fields(&mut without, &json!({}));
+        assert!(without.get("discord").is_none());
     }
 }

@@ -382,6 +382,84 @@ export function ObsField({ value, onChange, kind }) {
     </select>`;
 }
 
+// ---- Discord servers and voice channels ----------------------------------------------
+
+let discordGuilds = null;
+let discordLoading = null;
+/** Counts connection changes, so a load for an older one is not kept. */
+let discordGeneration = 0;
+/** Forgets the lists, e.g. after the connection changed. */
+export function forgetDiscordGuilds() {
+  discordGuilds = null;
+  discordLoading = null;
+  discordGeneration += 1;
+}
+
+/** Your Discord servers with their voice channels, fetched once per connection. */
+export function loadDiscordGuilds() {
+  if (discordGuilds) return Promise.resolve(discordGuilds);
+  const generation = discordGeneration;
+  discordLoading ??= api.post("/api/discord/guilds", {})
+    .then((data) => {
+      if (generation === discordGeneration) discordGuilds = data.guilds ?? [];
+      return data.guilds ?? [];
+    })
+    .finally(() => { if (generation === discordGeneration) discordLoading = null; });
+  return discordLoading;
+}
+
+/** The first voice channel known, to start a "join" button with. */
+export function defaultDiscordChannel() {
+  return discordGuilds?.find((g) => g.voice_channels.length)?.voice_channels[0]?.id;
+}
+
+function useDiscordGuilds() {
+  const [guilds, setGuilds] = useState(discordGuilds);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    if (discordGuilds) return;
+    loadDiscordGuilds().then(setGuilds).catch((e) => setError(e.message));
+  }, []);
+  return [guilds, error];
+}
+
+/** A voice channel, grouped by server. Falls back to typing its id. */
+export function DiscordChannelField({ value, onChange }) {
+  const [guilds, error] = useDiscordGuilds();
+  if (error || !guilds) {
+    return html`
+      <input type="text" inputmode="numeric" value=${value ?? ""} placeholder="123456789012345678" onInput=${(e) => onChange(e.currentTarget.value.trim())} />
+      ${error && html`<small class="hint">${t("discord.not.connected")}</small>`}`;
+  }
+  const known = guilds.some((g) => g.voice_channels.some((c) => c.id === value));
+  return html`
+    <select value=${value ?? ""} onChange=${(e) => onChange(e.currentTarget.value)}>
+      ${!value && html`<option value="">${t("discord.pick.channel")}</option>`}
+      ${value && !known && html`<option value=${value}>${value}</option>`}
+      ${guilds.filter((g) => g.voice_channels.length).map((g) => html`
+        <optgroup label=${g.name}>
+          ${g.voice_channels.map((c) => html`<option value=${c.id}>${c.name}</option>`)}
+        </optgroup>`)}
+    </select>`;
+}
+
+/** A server, or "" for the server of the channel you are in. Calls onChange(id, name). */
+export function DiscordGuildField({ value, name, onChange }) {
+  const [guilds, error] = useDiscordGuilds();
+  const list = guilds ?? [];
+  const known = list.some((g) => g.id === value);
+  return html`
+    <select value=${value ?? ""} onChange=${(e) => {
+      const id = e.currentTarget.value;
+      onChange(id || undefined, list.find((g) => g.id === id)?.name ?? (id === value ? name : undefined));
+    }}>
+      <option value="">${t("discord.guild.current")}</option>
+      ${value && !known && html`<option value=${value}>${name || value}</option>`}
+      ${list.map((g) => html`<option value=${g.id}>${g.name}</option>`)}
+    </select>
+    ${error && html`<small class="hint">${t("discord.not.connected")}</small>`}`;
+}
+
 // ---- images --------------------------------------------------------------------------
 
 export function ImageField({ value, onChange, max = 320 }) {

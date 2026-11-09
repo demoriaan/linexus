@@ -29,6 +29,7 @@ pub enum ReachKind {
     KeyboardShortcut,
     HttpRequest,
     ObsStudio,
+    Discord,
     LaunchApp,
     OpenPath,
     OpenUrl,
@@ -45,6 +46,9 @@ impl ReachKind {
             Self::KeyboardShortcut => "Press keyboard shortcuts",
             Self::HttpRequest => "Send web requests",
             Self::ObsStudio => "Control OBS Studio: recording, streaming, scenes and audio",
+            Self::Discord => {
+                "Control Discord: join and leave voice channels, mute and deafen, audio levels"
+            }
             Self::LaunchApp => "Start applications",
             Self::OpenPath => "Open files and folders",
             Self::OpenUrl => "Open web pages",
@@ -93,6 +97,22 @@ pub fn outside_reach(config: &NexusConfig) -> Vec<Reach> {
                 if let WidgetKind::Command(props) = &widget.kind {
                     let line = command_line(&props.program, &props.args);
                     found.push(at(ReachKind::CommandWidget, None, false, line));
+                }
+                let discord = match &widget.kind {
+                    WidgetKind::DiscordVoice(_) => Some("join a voice channel by tapping it"),
+                    WidgetKind::DiscordCall(_) => Some("change how loud others are for you"),
+                    WidgetKind::Volume(props) if props.source.is_discord() => {
+                        Some("set Discord's audio levels")
+                    }
+                    _ => None,
+                };
+                if let Some(detail) = discord {
+                    found.push(at(
+                        ReachKind::Discord,
+                        Some("tap"),
+                        false,
+                        detail.to_string(),
+                    ));
                 }
                 let gestures = [
                     ("tap", &widget.tap),
@@ -153,6 +173,19 @@ fn visit(action: &ActionSpec, in_sequence: bool, emit: &mut impl FnMut(ReachKind
                 None => command,
             };
             (ReachKind::ObsStudio, detail)
+        }
+        ActionSpec::Discord {
+            command, channel, ..
+        } => {
+            let command = serde_json::to_value(command)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_string))
+                .unwrap_or_default();
+            let detail = match channel {
+                Some(channel) => format!("{command} {channel}"),
+                None => command,
+            };
+            (ReachKind::Discord, detail)
         }
         ActionSpec::Sequence { steps, .. } => {
             for step in steps {

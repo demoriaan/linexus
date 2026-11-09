@@ -645,6 +645,106 @@ fn obs_actions_name_their_scene_or_source() {
 }
 
 #[test]
+fn discord_actions_and_the_voice_widget() {
+    let join: ActionSpec = serde_json::from_str(
+        r#"{"type":"discord","command":"join_voice","channel":"123456789012345678"}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        join,
+        ActionSpec::Discord {
+            command: DiscordCommand::JoinVoice,
+            channel: Some("123456789012345678".into()),
+            step: None,
+        }
+    );
+    assert!(join.to_external_action().is_none());
+    let mute: ActionSpec =
+        serde_json::from_str(r#"{"type":"discord","command":"toggle_mute"}"#).unwrap();
+    assert_eq!(
+        serde_json::to_value(&mute).unwrap(),
+        serde_json::json!({"type": "discord", "command": "toggle_mute"})
+    );
+
+    let mut config = default_config();
+    config.profiles[0].pages = vec![template_page(PageTemplate::Streaming, "stream")];
+    config.profiles[0].pages[0].widgets[0].tap = Some(mute);
+    validate(&config).unwrap();
+    for channel in [None, Some(""), Some("general")] {
+        config.profiles[0].pages[0].widgets[0].tap = Some(ActionSpec::Discord {
+            command: DiscordCommand::JoinVoice,
+            channel: channel.map(Into::into),
+            step: None,
+        });
+        assert!(matches!(
+            validate(&config),
+            Err(ConfigError::DiscordChannelMissing { .. })
+        ));
+    }
+
+    let widget: WidgetKind =
+        serde_json::from_str(r#"{"type":"discord_voice","guild_id":"42"}"#).unwrap();
+    let WidgetKind::DiscordVoice(props) = &widget else {
+        panic!("not a voice widget: {widget:?}");
+    };
+    assert_eq!(props.guild_id.as_deref(), Some("42"));
+    assert!(!props.show_empty);
+    config.profiles[0].pages[0].widgets[0].tap = None;
+    config.profiles[0].pages[0].widgets[0].kind = WidgetKind::DiscordVoice(DiscordVoiceProps {
+        guild_id: Some("../42".into()),
+        ..DiscordVoiceProps::default()
+    });
+    assert!(matches!(
+        validate(&config),
+        Err(ConfigError::InvalidDiscordGuild { .. })
+    ));
+    config.profiles[0].pages[0].widgets[0].kind = widget;
+    validate(&config).unwrap();
+}
+
+#[test]
+fn discord_audio_call_widget_and_automation() {
+    let up: ActionSpec =
+        serde_json::from_str(r#"{"type":"discord","command":"input_volume_up","step":5}"#).unwrap();
+    assert_eq!(
+        up,
+        ActionSpec::Discord {
+            command: DiscordCommand::InputVolumeUp,
+            channel: None,
+            step: Some(5),
+        }
+    );
+    assert!(DiscordCommand::InputVolumeUp.takes_step());
+    assert!(!DiscordCommand::PushToTalk.takes_step());
+
+    let call: WidgetKind = serde_json::from_str(r#"{"type":"discord_call"}"#).unwrap();
+    assert_eq!(call, WidgetKind::DiscordCall(DiscordCallProps::default()));
+    assert!(matches!(&call, WidgetKind::DiscordCall(p) if p.show_names && p.show_ping));
+
+    let slider: WidgetKind =
+        serde_json::from_str(r#"{"type":"volume","source":"discord_output"}"#).unwrap();
+    assert!(matches!(&slider, WidgetKind::Volume(p) if p.source == VolumeSource::DiscordOutput));
+    // The system slider keeps its old shape.
+    assert!(
+        serde_json::to_value(WidgetKind::Volume(VolumeProps::default()))
+            .unwrap()
+            .get("source")
+            .is_none()
+    );
+
+    let mut config = default_config();
+    assert!(config.settings.discord.notifications && config.settings.discord.mute_indicator);
+    assert!(!config.profiles[0].discord_voice);
+    let json = serde_json::to_value(&config.profiles[0]).unwrap();
+    assert!(json.get("discord_voice").is_none());
+    config.profiles[0].discord_voice = true;
+    config.profiles[0].pages[0].widgets[0].kind = call;
+    validate(&config).unwrap();
+    let back: NexusConfig = serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+    assert!(back.profiles[0].discord_voice);
+}
+
+#[test]
 fn touch_correction_shifts_reported_touches() {
     let none = TouchCorrection::default();
     assert_eq!(none.apply(300), 300);

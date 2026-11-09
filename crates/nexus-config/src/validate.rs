@@ -62,6 +62,10 @@ pub enum ConfigError {
     InvalidContentType { widget: String },
     #[error("widget '{widget}' controls OBS without naming the scene or audio source")]
     ObsTargetMissing { widget: String },
+    #[error("widget '{widget}' joins a Discord voice channel without naming a valid channel")]
+    DiscordChannelMissing { widget: String },
+    #[error("widget '{widget}' names an invalid Discord server id")]
+    InvalidDiscordGuild { widget: String },
     #[error("widget '{widget}' nests sequences too deeply")]
     SequenceTooDeep { widget: String },
     #[error(
@@ -200,6 +204,16 @@ fn validate_page(page: &Page, profile_ids: &HashSet<&str>, page_ids: &HashSet<&s
                 icon: Some(icon), ..
             }) if icon.starts_with("data:") => check_image(page, icon)?,
             WidgetKind::Command(props) => check_program(&widget.id, &props.program)?,
+            WidgetKind::DiscordVoice(props)
+                if props
+                    .guild_id
+                    .as_deref()
+                    .is_some_and(|id| !is_snowflake(id)) =>
+            {
+                return Err(ConfigError::InvalidDiscordGuild {
+                    widget: widget.id.clone(),
+                })
+            }
             _ => {}
         }
         for action in [&widget.tap, &widget.double_tap, &widget.hold]
@@ -314,6 +328,13 @@ fn validate_action(
                 widget: widget.to_string(),
             })
         }
+        ActionSpec::Discord {
+            command, channel, ..
+        } if command.needs_channel() && !channel.as_deref().is_some_and(is_snowflake) => {
+            Err(ConfigError::DiscordChannelMissing {
+                widget: widget.to_string(),
+            })
+        }
         ActionSpec::Sequence { steps, delay_ms } => {
             if depth >= 2 {
                 return Err(ConfigError::SequenceTooDeep {
@@ -339,4 +360,9 @@ fn validate_action(
         }
         _ => Ok(()),
     }
+}
+
+/// A Discord id: a number of up to 20 digits.
+fn is_snowflake(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 20 && id.bytes().all(|b| b.is_ascii_digit())
 }

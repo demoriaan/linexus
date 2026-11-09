@@ -227,6 +227,19 @@ impl Scene {
     /// notifications and media overlays swallow it, while feedback toasts
     /// (answers to the user's own taps) let it through, so quick repeated
     /// taps all count.
+    /// What a tap on the overlay shown now opens (a Discord message).
+    pub(crate) fn overlay_link(&self, now: Instant) -> Option<String> {
+        match &self.overlay {
+            Some(ShownOverlay {
+                overlay: Overlay::Notification { link, .. },
+                shown,
+                duration,
+                ..
+            }) if now < *shown + *duration => link.clone(),
+            _ => None,
+        }
+    }
+
     pub(crate) fn dismiss_overlay(&mut self, now: Instant) -> bool {
         match &mut self.overlay {
             Some(shown) if now < shown.shown + shown.duration => {
@@ -365,7 +378,14 @@ impl Scene {
             } else {
                 1.0 - (elapsed - shown.duration).as_secs_f32() / OVERLAY_SLIDE.as_secs_f32()
             };
-            nexus_render::draw_overlay(&mut canvas, &shown.overlay, theme, live, visibility);
+            nexus_render::draw_overlay_at(
+                &mut canvas,
+                &shown.overlay,
+                theme,
+                live,
+                visibility,
+                elapsed,
+            );
         }
         canvas
     }
@@ -506,6 +526,8 @@ mod tests {
             title: title.into(),
             body: String::new(),
             icon: None,
+            link: None,
+            scroll: false,
         };
         let mut scene = Scene::default();
         let t = Instant::now();
@@ -540,6 +562,8 @@ mod tests {
             title: title.into(),
             body: String::new(),
             icon: None,
+            link: None,
+            scroll: false,
         };
         let mut scene = Scene::default();
         let t = Instant::now();
@@ -578,6 +602,8 @@ mod tests {
             title: "New".into(),
             body: String::new(),
             icon: None,
+            link: None,
+            scroll: false,
         };
         let volume = |percent| {
             Overlay::Volume(nexus_render::VolumeInfo {
@@ -614,6 +640,8 @@ mod tests {
             title: text.into(),
             body: String::new(),
             icon: None,
+            link: None,
+            scroll: false,
         };
         let mut scene = Scene::default();
         let t = Instant::now();

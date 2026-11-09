@@ -37,6 +37,7 @@ pub struct Settings {
     pub weather: Option<GeoLocation>,
     pub notifications: NotificationSettings,
     pub overlays: OverlaySettings,
+    pub discord: DiscordSettings,
     pub touch: TouchCorrection,
 }
 
@@ -51,6 +52,7 @@ impl Default for Settings {
             weather: None,
             notifications: NotificationSettings::default(),
             overlays: OverlaySettings::default(),
+            discord: DiscordSettings::default(),
             touch: TouchCorrection::default(),
         }
     }
@@ -183,6 +185,42 @@ impl TouchCorrection {
     }
 }
 
+/// What Discord shows on the strip besides its widgets, once it is
+/// connected in Studio.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct DiscordSettings {
+    /// Show Discord's message notifications; a tap opens the conversation.
+    pub notifications: bool,
+    /// While you sit muted or deafened in a voice channel, a red badge in
+    /// the corner of every page says so.
+    pub mute_indicator: bool,
+    /// Which notifications too long for their line scroll to the end.
+    pub scroll: NotificationScroll,
+}
+
+impl Default for DiscordSettings {
+    fn default() -> Self {
+        Self {
+            notifications: true,
+            mute_indicator: true,
+            scroll: NotificationScroll::Direct,
+        }
+    }
+}
+
+/// Which long Discord notifications scroll to the end of their text; the
+/// others show their beginning.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationScroll {
+    /// Direct and group messages only; server messages show their start.
+    #[default]
+    Direct,
+    All,
+    Never,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Profile {
     pub id: String,
@@ -194,6 +232,9 @@ pub struct Profile {
     /// Activate this profile while one of these applications has focus.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub apps: Vec<String>,
+    /// Activate this profile while you sit in a Discord voice channel.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub discord_voice: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -326,6 +367,8 @@ pub enum WidgetKind {
     Text(TextProps),
     Image(ImageProps),
     Command(CommandProps),
+    DiscordVoice(DiscordVoiceProps),
+    DiscordCall(DiscordCallProps),
     Spacer,
 }
 
@@ -345,6 +388,8 @@ impl WidgetKind {
             Self::Text(_) => "text",
             Self::Image(_) => "image",
             Self::Command(_) => "command",
+            Self::DiscordVoice(_) => "discord_voice",
+            Self::DiscordCall(_) => "discord_call",
             Self::Spacer => "spacer",
         }
     }
@@ -434,6 +479,42 @@ pub struct NetworkProps {
     pub interface: Option<String>,
 }
 
+/// Who sits in the voice channels of a Discord server, with their pictures.
+/// A tap on a channel joins it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct DiscordVoiceProps {
+    /// Server whose voice channels are shown; without one, the server of
+    /// the voice channel you are in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guild_id: Option<String>,
+    /// The server's name when it was picked, for Studio.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guild_name: Option<String>,
+    /// Also lists the channels nobody is in.
+    pub show_empty: bool,
+}
+
+/// The voice channel you are in: who is there, who speaks, and the
+/// connection's ping. A tap on someone opens their volume and mute for you.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct DiscordCallProps {
+    /// Names under the pictures.
+    pub show_names: bool,
+    /// The voice connection's ping and quality.
+    pub show_ping: bool,
+}
+
+impl Default for DiscordCallProps {
+    fn default() -> Self {
+        Self {
+            show_names: true,
+            show_ping: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct MediaProps {
@@ -467,6 +548,9 @@ pub struct VolumeProps {
     /// Volume change per notch when the slider is not dragged but tapped at
     /// its ends.
     pub step: u8,
+    /// What the slider sets: the system volume, or Discord's.
+    #[serde(skip_serializing_if = "VolumeSource::is_system")]
+    pub source: VolumeSource,
 }
 
 impl Default for VolumeProps {
@@ -474,7 +558,29 @@ impl Default for VolumeProps {
         Self {
             show_value: true,
             step: 5,
+            source: VolumeSource::System,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VolumeSource {
+    #[default]
+    System,
+    /// Discord's microphone level, 0..=100 %; the icon mutes.
+    DiscordInput,
+    /// Discord's output level, 0..=200 %; the icon deafens.
+    DiscordOutput,
+}
+
+impl VolumeSource {
+    pub fn is_system(&self) -> bool {
+        *self == Self::System
+    }
+
+    pub fn is_discord(self) -> bool {
+        !self.is_system()
     }
 }
 
@@ -729,6 +835,17 @@ pub enum ActionSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target: Option<String>,
     },
+    /// Controls the Discord desktop app: mute, deafen, join or leave voice,
+    /// audio levels and processing.
+    Discord {
+        command: DiscordCommand,
+        /// Voice channel id for `join_voice`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        channel: Option<String>,
+        /// Percent per press for the volume commands; 10 when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<u8>,
+    },
     #[serde(alias = "screen_next")]
     NextPage,
     #[serde(alias = "screen_previous")]
@@ -812,6 +929,45 @@ impl ObsCommand {
     /// Needs a scene or source name in `target`.
     pub fn needs_target(self) -> bool {
         matches!(self, Self::SetScene | Self::ToggleMute)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscordCommand {
+    ToggleMute,
+    ToggleDeafen,
+    /// Joins the voice channel named by `channel`.
+    JoinVoice,
+    LeaveVoice,
+    /// Opens the microphone while the finger stays on the button.
+    PushToTalk,
+    InputVolumeUp,
+    InputVolumeDown,
+    OutputVolumeUp,
+    OutputVolumeDown,
+    /// Switches between voice activity and push to talk.
+    ToggleVoiceMode,
+    ToggleNoiseSuppression,
+    ToggleEchoCancellation,
+    ToggleAutomaticGain,
+}
+
+impl DiscordCommand {
+    /// Needs a voice channel id in `channel`.
+    pub fn needs_channel(self) -> bool {
+        matches!(self, Self::JoinVoice)
+    }
+
+    /// Takes a `step`.
+    pub fn takes_step(self) -> bool {
+        matches!(
+            self,
+            Self::InputVolumeUp
+                | Self::InputVolumeDown
+                | Self::OutputVolumeUp
+                | Self::OutputVolumeDown
+        )
     }
 }
 

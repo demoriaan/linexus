@@ -2,7 +2,7 @@ use super::{press_glow, Ctx};
 use crate::canvas::{Bounds, Canvas};
 use crate::format::{self, Word};
 use crate::text::{FontFace, TextStyle};
-use nexus_config::{VolumeProps, Widget};
+use nexus_config::{VolumeProps, VolumeSource, Widget};
 
 const ICON_W: f32 = 34.0;
 const RIGHT_PAD: f32 = 14.0;
@@ -26,21 +26,26 @@ pub fn draw(canvas: &mut Canvas, b: Bounds, widget: &Widget, props: &VolumeProps
     let palette = ctx.palette;
     let accent = ctx.accent(widget, palette.series[0]);
     press_glow(canvas, b, accent, ctx.pressed(widget) * 0.5);
-    let known = ctx.live.volume.is_some();
-    let volume = ctx.live.volume.unwrap_or_default();
+    let level = level(props.source, ctx);
+    let known = level.is_some();
+    let level = level.unwrap_or_default();
     let dragging = ctx
         .ui
         .dragging
         .as_ref()
         .filter(|(id, _)| *id == widget.id)
         .map(|(_, v)| *v);
-    let fraction = dragging.unwrap_or(f32::from(volume.percent.min(100)) / 100.0);
-    let icon = if !known || volume.muted || fraction <= 0.0 {
-        "volume-x"
-    } else if fraction < 0.5 {
-        "volume-1"
-    } else {
-        "volume-2"
+    let fraction =
+        dragging.unwrap_or(f32::from(level.percent.min(level.max)) / f32::from(level.max));
+    let volume = level;
+    let icon = match props.source {
+        VolumeSource::DiscordInput if !known || volume.muted => "mic-off",
+        VolumeSource::DiscordInput => "mic",
+        VolumeSource::DiscordOutput if !known || volume.muted => "headphone-off",
+        VolumeSource::DiscordOutput => "headphones",
+        VolumeSource::System if !known || volume.muted || fraction <= 0.0 => "volume-x",
+        VolumeSource::System if fraction < 0.5 => "volume-1",
+        VolumeSource::System => "volume-2",
     };
     let icon_color = if volume.muted {
         palette.text_dim
@@ -72,19 +77,61 @@ pub fn draw(canvas: &mut Canvas, b: Bounds, widget: &Widget, props: &VolumeProps
 
     if props.show_value {
         let caption = ctx.caption();
-        let label = if volume.muted {
-            format::word(Word::Muted, ctx.live.locale).to_uppercase()
-        } else {
-            format::word(Word::Volume, ctx.live.locale).to_uppercase()
+        let label = match props.source {
+            _ if volume.muted => format::word(Word::Muted, ctx.live.locale).to_uppercase(),
+            VolumeSource::System => format::word(Word::Volume, ctx.live.locale).to_uppercase(),
+            VolumeSource::DiscordInput => {
+                format::word(Word::Microphone, ctx.live.locale).to_uppercase()
+            }
+            VolumeSource::DiscordOutput => "DISCORD".to_string(),
         };
         canvas.text(left, 41.0, &label, &caption);
         let value = TextStyle::new(FontFace::Bold, 13.0, palette.text_soft).tabular();
         let shown = if known || dragging.is_some() {
-            format!("{}%", (fraction * 100.0).round())
+            format!("{}%", (fraction * f32::from(volume.max)).round())
         } else {
             "–".into()
         };
         canvas.text_right(right, 41.0, &shown, &value);
+    }
+}
+
+/// A slider's reading: its value, its top (100, or 200 for Discord's
+/// output) and whether it is muted.
+#[derive(Debug, Clone, Copy)]
+struct Level {
+    percent: u16,
+    max: u16,
+    muted: bool,
+}
+
+impl Default for Level {
+    fn default() -> Self {
+        Self {
+            percent: 0,
+            max: 100,
+            muted: false,
+        }
+    }
+}
+
+fn level(source: VolumeSource, ctx: &Ctx) -> Option<Level> {
+    match source {
+        VolumeSource::System => ctx.live.volume.map(|v| Level {
+            percent: u16::from(v.percent),
+            max: 100,
+            muted: v.muted,
+        }),
+        VolumeSource::DiscordInput => ctx.live.discord.as_ref().map(|d| Level {
+            percent: u16::from(d.input_volume),
+            max: 100,
+            muted: d.self_muted,
+        }),
+        VolumeSource::DiscordOutput => ctx.live.discord.as_ref().map(|d| Level {
+            percent: d.output_volume,
+            max: 200,
+            muted: d.self_deafened,
+        }),
     }
 }
 

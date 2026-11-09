@@ -199,6 +199,11 @@ pub enum Overlay {
         title: String,
         body: String,
         icon: Option<Arc<Pixmap>>,
+        /// Opened when the notification is tapped (a Discord message).
+        link: Option<String>,
+        /// A body too long for one line scrolls to its end instead of
+        /// being cut.
+        scroll: bool,
     },
     Volume(VolumeInfo),
     NowPlaying(Box<MediaInfo>),
@@ -207,6 +212,118 @@ pub enum Overlay {
         icon: String,
         text: String,
     },
+}
+
+/// The Discord app's voice state while the daemon is signed in to it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DiscordInfo {
+    /// The voice channel you are in, and its server.
+    pub channel: Option<String>,
+    pub guild: Option<String>,
+    pub self_muted: bool,
+    pub self_deafened: bool,
+    /// Voice channels of the servers voice widgets show, keyed by server id.
+    pub guilds: HashMap<String, Vec<DiscordVoiceChannel>>,
+    /// Microphone level, 0..=100 %.
+    pub input_volume: u8,
+    /// What you hear, 0..=200 %.
+    pub output_volume: u16,
+    /// Push to talk instead of voice activity.
+    pub push_to_talk: bool,
+    pub noise_suppression: bool,
+    pub echo_cancellation: bool,
+    pub automatic_gain: bool,
+    /// The voice connection, while you are in a channel.
+    pub link: Option<DiscordLink>,
+    /// The member whose volume the call widget shows; set by the daemon.
+    pub focus: Option<String>,
+    /// Draw the muted badge in the corner of the page; set by the daemon.
+    pub mute_badge: bool,
+    /// Counts up every few seconds; voice widgets with more channels than
+    /// room show their next page. Set by the daemon.
+    pub rotation: u64,
+    /// Your own user id, for the call widget's controls.
+    pub self_id: Option<String>,
+}
+
+/// How the voice connection is doing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DiscordLink {
+    pub connected: bool,
+    /// Last round trip to the voice server.
+    pub ping_ms: Option<u32>,
+}
+
+impl DiscordLink {
+    /// 3 good, 2 fair, 1 poor, 0 not connected.
+    pub fn bars(&self) -> u8 {
+        match (self.connected, self.ping_ms) {
+            (false, _) => 0,
+            (true, None) => 2,
+            (true, Some(0..=99)) => 3,
+            (true, Some(100..=249)) => 2,
+            (true, Some(_)) => 1,
+        }
+    }
+}
+
+impl DiscordInfo {
+    /// The voice channel you sit in, when its server is followed.
+    pub fn current_channel(&self) -> Option<&DiscordVoiceChannel> {
+        let id = self.channel.as_deref()?;
+        self.guilds
+            .values()
+            .flatten()
+            .find(|channel| channel.id == id)
+    }
+
+    /// The channels a voice widget shows: its own server's, or the one of
+    /// the channel you are in.
+    pub fn channels_for(&self, guild: Option<&str>) -> &[DiscordVoiceChannel] {
+        guild
+            .or(self.guild.as_deref())
+            .and_then(|guild| self.guilds.get(guild))
+            .map_or(&[], Vec::as_slice)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct DiscordVoiceChannel {
+    pub id: String,
+    pub name: String,
+    pub members: Vec<DiscordMember>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DiscordMember {
+    pub user_id: String,
+    pub name: String,
+    pub avatar: Option<Arc<Pixmap>>,
+    pub speaking: bool,
+    pub muted: bool,
+    pub deafened: bool,
+    /// How loud you hear them, 0..=200 %.
+    pub volume: u16,
+    /// Muted by you, for you only.
+    pub local_muted: bool,
+}
+
+/// Pictures compare by identity: the same avatar is the same `Arc`.
+impl PartialEq for DiscordMember {
+    fn eq(&self, other: &Self) -> bool {
+        self.user_id == other.user_id
+            && self.name == other.name
+            && self.speaking == other.speaking
+            && self.muted == other.muted
+            && self.deafened == other.deafened
+            && self.volume == other.volume
+            && self.local_muted == other.local_muted
+            && match (&self.avatar, &other.avatar) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+    }
 }
 
 impl PartialEq for MediaInfo {
@@ -240,6 +357,8 @@ pub struct LiveData {
     pub images: HashMap<String, Arc<Pixmap>>,
     /// None while OBS is not connected (or not set up).
     pub obs: Option<ObsInfo>,
+    /// None while Discord is not connected (or not set up).
+    pub discord: Option<DiscordInfo>,
 }
 
 impl LiveData {

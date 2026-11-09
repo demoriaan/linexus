@@ -197,6 +197,7 @@ fn migrate_v1(raw: &Value) -> Result<(NexusConfig, MigrationReport), String> {
             },
             pages,
             apps: Vec::new(),
+            discord_voice: false,
         });
     }
     let active_profile = str_field(raw, "active_profile")

@@ -9,7 +9,7 @@ pub mod clock;
 pub mod command;
 pub mod focus;
 pub mod hass;
-mod http;
+pub(crate) mod http;
 pub mod hwmon;
 pub mod media;
 pub mod metrics;
