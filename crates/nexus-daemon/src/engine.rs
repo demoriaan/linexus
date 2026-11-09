@@ -16,7 +16,7 @@ use nexus_config::{
     ActionSpec, BrightnessAction, DiscordCommand, MediaKey, NotificationScroll, VolumeSource,
     Widget, WidgetKind,
 };
-use nexus_render::{CallHit, Canvas, MediaZone, Overlay};
+use nexus_render::{CallHit, Canvas, DiscordInfo, MediaZone, Overlay};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
@@ -36,7 +36,7 @@ const OWN_VOLUME_QUIET: Duration = Duration::from_secs(2);
 const NOTIFICATION_MIN: Duration = Duration::from_millis(1500);
 /// How long a desktop notification from Discord waits for the same message
 /// over RPC, which can arrive just after it.
-const DESKTOP_COPY_HOLD: Duration = Duration::from_millis(600);
+const DESKTOP_COPY_HOLD: Duration = Duration::from_millis(1_800);
 /// A Discord call widget closes someone's controls after this long
 /// without a touch.
 const DISCORD_FOCUS: Duration = Duration::from_secs(8);
@@ -220,9 +220,10 @@ impl Engine {
         else {
             return Target::default();
         };
-        let slider = matches!(widget.kind, WidgetKind::Volume(_))
+        let slider = (matches!(widget.kind, WidgetKind::Volume(_))
             && widget.tap.is_none()
-            && nexus_render::volume_fraction_at(widget.x, widget.w, x).is_some();
+            && nexus_render::volume_fraction_at(widget.x, widget.w, x).is_some())
+        .then_some((widget.x, widget.x.saturating_add(widget.w)));
         let double_tap = widget.double_tap.is_some()
             || (widget.tap.is_none()
                 && matches!(widget.kind, WidgetKind::News(_) | WidgetKind::Timer(_)));
@@ -345,6 +346,7 @@ impl Engine {
                     self.scene.slide(Some((widget.id.clone(), fraction)));
                 }
             }
+            Interaction::SlideCancel => self.scene.slide(None),
             Interaction::Drag { dx } => self.scene.drag(dx, now),
             Interaction::DragEnd { commit, .. } => match commit {
                 Some(forward) => {
@@ -470,13 +472,21 @@ impl Engine {
             let volume = (i16::from(info.input_volume) + delta).clamp(0, 100);
             crate::discord::Request::InputVolume(volume as u8)
         };
+        let toggle_mute = || crate::discord::Request::Command {
+            command: DiscordCommand::ToggleMute,
+            channel: None,
+            step: None,
+        };
         let step = DISCORD_USER_STEP as i16;
         let request = match hit {
-            CallHit::Mute(id) if yourself(&id) => Some(crate::discord::Request::Command {
-                command: DiscordCommand::ToggleMute,
+            // Deafened, the red button means Discord has you muted anyway.
+            CallHit::Microphone if info.self_deafened => Some(crate::discord::Request::Command {
+                command: DiscordCommand::ToggleDeafen,
                 channel: None,
                 step: None,
             }),
+            CallHit::Microphone => Some(toggle_mute()),
+            CallHit::Mute(id) if yourself(&id) => Some(toggle_mute()),
             CallHit::Quieter(id) if yourself(&id) => Some(microphone(-step)),
             CallHit::Louder(id) if yourself(&id) => Some(microphone(step)),
             CallHit::Member(id) => {
@@ -966,7 +976,9 @@ impl Engine {
                 .any(|muted| name.eq_ignore_ascii_case(muted.trim()))
         };
         let longest = Duration::from_millis(u64::from(shown.duration_ms)).max(NOTIFICATION_MIN);
-        let show_discord = shown.enabled && settings.discord.notifications && !muted("discord");
+        let show_discord = shown.enabled
+            && settings.discord.notifications
+            && !crate::discord::DISCORD_NAMES.iter().any(|name| muted(name));
         for n in self.discord.take_notifications() {
             if !show_discord {
                 continue;
@@ -1012,7 +1024,7 @@ impl Engine {
             let discord = n
                 .names
                 .iter()
-                .any(|name| name.eq_ignore_ascii_case("discord"));
+                .any(|name| crate::discord::DISCORD_NAMES.contains(&name.to_lowercase().as_str()));
             if discord && from_discord {
                 self.held_desktop.push((now + DESKTOP_COPY_HOLD, n));
             } else {
@@ -1271,10 +1283,7 @@ impl Engine {
         if let Some(discord) = live.discord.as_mut() {
             discord.focus = focus;
             discord.rotation = self.voice_rotation;
-            discord.mute_badge = settings.discord.mute_indicator
-                && discord.channel.is_some()
-                && (discord.self_muted || discord.self_deafened)
-                && !page.widgets.iter().any(shows_own_mute);
+            discord.mic_badge = settings.discord.mute_indicator && wants_mic_badge(discord, page);
         }
         if let Some(widget) = self
             .runtime
@@ -1541,6 +1550,16 @@ impl Engine {
                 self.touch_event(phase, x.min(639), now);
                 (nexus_ipc::Response::ok("touch"), true)
             }
+            C::Calibrate {
+                action: nexus_ipc::CalibrateAction::Start,
+            } if self.mode == nexus_ipc::DaemonMode::Hardware
+                && self.device.state != nexus_ipc::DeviceState::Connected =>
+            {
+                (
+                    nexus_ipc::Response::error("the strip is not connected"),
+                    false,
+                )
+            }
             C::Calibrate { action } => {
                 let changed = self.calibrate(action, now);
                 (
@@ -1583,6 +1602,8 @@ impl Engine {
                 (self.ok("brightness updated"), true)
             }
             C::Blank => {
+                // The marks cannot be seen any more.
+                self.calibrate(nexus_ipc::CalibrateAction::Cancel, now);
                 self.runtime.manual_blank = true;
                 (self.ok("screen blanked"), true)
             }
@@ -1658,6 +1679,12 @@ fn is_push_to_talk(widget: &Widget) -> bool {
             ..
         })
     )
+}
+
+/// The microphone badge is for a voice channel you are in, and only where
+/// nothing else on the page already shows your microphone.
+fn wants_mic_badge(discord: &DiscordInfo, page: &nexus_config::Page) -> bool {
+    discord.channel.is_some() && !page.widgets.iter().any(shows_own_mute)
 }
 
 /// Widgets that already show whether you are muted on Discord, so the

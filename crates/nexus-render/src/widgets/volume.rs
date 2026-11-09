@@ -6,6 +6,10 @@ use nexus_config::{VolumeProps, VolumeSource, Widget};
 
 const ICON_W: f32 = 34.0;
 const RIGHT_PAD: f32 = 14.0;
+/// The last pixels at each end of the track already count as the end. The
+/// panel reads poorly right at its border and a fingertip hides the knob,
+/// so nobody can place it on the very last pixel.
+const END_REACH: f32 = 8.0;
 
 fn track_range(widget_x: f32, widget_w: f32) -> (f32, f32) {
     (widget_x + ICON_W + 6.0, widget_x + widget_w - RIGHT_PAD)
@@ -19,7 +23,9 @@ pub fn volume_fraction_at(widget_x: u16, widget_w: u16, x: u16) -> Option<f32> {
     if x < left - 6.0 {
         return None;
     }
-    Some(((x - left) / (right - left).max(1.0)).clamp(0.0, 1.0))
+    let reach = END_REACH.min((right - left) / 4.0);
+    let travel = (right - left - 2.0 * reach).max(1.0);
+    Some(((x - left - reach) / travel).clamp(0.0, 1.0))
 }
 
 pub fn draw(canvas: &mut Canvas, b: Bounds, widget: &Widget, props: &VolumeProps, ctx: &Ctx) {
@@ -146,5 +152,17 @@ mod tests {
         assert_eq!(volume_fraction_at(480, 160, left as u16), Some(0.0));
         assert_eq!(volume_fraction_at(480, 160, right as u16), Some(1.0));
         assert_eq!(volume_fraction_at(480, 160, 639), Some(1.0));
+    }
+
+    #[test]
+    fn the_ends_can_be_reached_without_hitting_the_last_pixel() {
+        // Widget 480..640, track 520..626.
+        assert_eq!(volume_fraction_at(480, 160, 618), Some(1.0));
+        assert_eq!(volume_fraction_at(480, 160, 639), Some(1.0));
+        assert_eq!(volume_fraction_at(480, 160, 528), Some(0.0));
+        assert_eq!(volume_fraction_at(480, 160, 516), Some(0.0));
+        assert_eq!(volume_fraction_at(480, 160, 573), Some(0.5));
+        // The speaker icon is not the slider.
+        assert_eq!(volume_fraction_at(480, 160, 490), None);
     }
 }

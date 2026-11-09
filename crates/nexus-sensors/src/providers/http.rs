@@ -30,7 +30,7 @@ pub(crate) fn http_request(
     timeout: Duration,
 ) -> Result<HttpResponse, String> {
     let config = curl_header_config(headers)?;
-    send(method, url, config, body, timeout)
+    send(method, url, config, body, timeout, true)
 }
 
 /// POSTs an `application/x-www-form-urlencoded` body that holds secrets
@@ -48,7 +48,8 @@ pub(crate) fn http_post_private_form(
         .join("&");
     // Percent-encoding leaves no quote, backslash or line break to escape.
     let config = format!("data-binary = \"{body}\"\n");
-    send("POST", url, config, None, timeout)
+    // A redirect must not carry the secret anywhere else.
+    send("POST", url, config, None, timeout, false)
 }
 
 fn send(
@@ -57,16 +58,19 @@ fn send(
     config: String,
     body: Option<&str>,
     timeout: Duration,
+    follow_redirects: bool,
 ) -> Result<HttpResponse, String> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err(format!("{url} is not an http(s) address"));
     }
     let max_time = timeout.as_secs().max(1).to_string();
     let mut command = Command::new("curl");
+    if follow_redirects {
+        command.arg("--location");
+    }
     command.args([
         "--silent",
         "--show-error",
-        "--location",
         "--proto",
         "=http,https",
         "--proto-redir",

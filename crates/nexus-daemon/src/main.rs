@@ -191,6 +191,8 @@ fn main() -> Result<()> {
         }
         None => hardware::run_hardware(&mut engine, &cfg),
     };
+    // A clean stop must not leave a held push to talk open.
+    engine.cancel_touch(std::time::Instant::now());
     log::log(&logger, Level::Info, "daemon_stop", "daemon stopped");
     result
 }

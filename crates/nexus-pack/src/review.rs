@@ -4,8 +4,8 @@
 //! change what the strip shows; the ones listed here act on the computer
 //! with the user's rights as soon as a button is tapped: they run programs,
 //! type into the focused window (a line break presses Enter, so text typed
-//! into a terminal runs as a command), send web requests, open things or
-//! start an OBS stream.
+//! into a terminal runs as a command), send web requests, open things,
+//! start an OBS stream or switch Home Assistant devices.
 
 use crate::{load_checked, profile_summary, PackProfileSummary};
 use anyhow::Result;
@@ -98,9 +98,22 @@ pub fn outside_reach(config: &NexusConfig) -> Vec<Reach> {
                     let line = command_line(&props.program, &props.args);
                     found.push(at(ReachKind::CommandWidget, None, false, line));
                 }
+                // Without an action of its own, a tile switches its entity.
+                // Read-only ones (sensors) are listed too: a line too many
+                // in a review is cheap.
+                if let (WidgetKind::Entity(props), None) = (&widget.kind, &widget.tap) {
+                    found.push(at(
+                        ReachKind::HomeAssistant,
+                        Some("tap"),
+                        false,
+                        format!("switch {}", props.entity_id),
+                    ));
+                }
                 let discord = match &widget.kind {
                     WidgetKind::DiscordVoice(_) => Some("join a voice channel by tapping it"),
-                    WidgetKind::DiscordCall(_) => Some("change how loud others are for you"),
+                    WidgetKind::DiscordCall(_) => {
+                        Some("mute your microphone and change how loud others are for you")
+                    }
                     WidgetKind::Volume(props) if props.source.is_discord() => {
                         Some("set Discord's audio levels")
                     }

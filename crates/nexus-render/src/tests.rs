@@ -393,10 +393,34 @@ fn discord_call_widget_sliders_and_the_muted_badge() {
     let discord = live.discord.as_mut().unwrap();
     discord.focus = None;
     discord.self_muted = true;
-    discord.mute_badge = true;
+    discord.mic_badge = true;
     let badge = render_page(&page, &theme, &live, &ui());
     snapshot("discord-muted-badge", &badge);
     assert!(red_corner(&badge) > 100, "{}", red_corner(&badge));
+
+    let white_corner = |canvas: &Canvas| {
+        canvas
+            .rgba()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(i, px)| {
+                i % WIDTH > 600 && i / WIDTH < 22 && px[0] > 230 && px[1] > 230 && px[2] > 230
+            })
+            .count()
+    };
+    live.discord.as_mut().unwrap().self_muted = false;
+    let open = render_page(&page, &theme, &live, &ui());
+    snapshot("discord-mic-on-badge", &open);
+    assert_eq!(red_corner(&open), 0);
+    assert!(
+        white_corner(&open) > white_corner(&normal) + 100,
+        "{} against {}",
+        white_corner(&open),
+        white_corner(&normal)
+    );
+    live.discord.as_mut().unwrap().self_muted = true;
 
     live.discord.as_mut().unwrap().channel = None;
     snapshot(

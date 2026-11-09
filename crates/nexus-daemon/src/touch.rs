@@ -5,7 +5,8 @@
 //! while the finger is still down, so the strip reacts without waiting for
 //! the release). A finger that travels drags the page along and changes it
 //! on release when it went far or fast enough. Sliders capture the finger
-//! instead and follow it.
+//! and follow it, until it leaves the widget: then it was a swipe that
+//! started on the slider, and the page takes over.
 //!
 //! Taps fire on release unless the widget also has a double-tap meaning;
 //! only then is the tap held back for the double-tap window. Widgets that
@@ -32,6 +33,9 @@ const REPEAT_INTERVAL: Duration = Duration::from_millis(160);
 /// A finger down without a single report for this long has lifted and the
 /// release got lost; it is released where it was last seen.
 const LOST_RELEASE: Duration = Duration::from_secs(10);
+/// How far past its widget a finger on a slider may go and still mean the
+/// slider: aiming for an end overshoots a little.
+const SLIDER_ESCAPE_PX: u16 = 12;
 
 /// A widget of the page that showed when the finger went down.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,8 +49,9 @@ pub(crate) struct WidgetRef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct Target {
     pub(crate) widget: Option<WidgetRef>,
-    /// The widget follows the finger (volume slider).
-    pub(crate) slider: bool,
+    /// The widget follows the finger (volume slider); holds the X range
+    /// it covers, end exclusive.
+    pub(crate) slider: Option<(u16, u16)>,
     /// The widget distinguishes double taps, so single taps wait briefly.
     pub(crate) double_tap: bool,
     /// A hold keeps firing until the finger lifts.
@@ -80,6 +85,8 @@ pub(crate) enum Interaction {
         x: u16,
         done: bool,
     },
+    /// The finger left the slider: the level stays as it was.
+    SlideCancel,
     /// Page follows the finger; positive `dx` reveals the next page.
     Drag {
         dx: i32,
@@ -105,6 +112,9 @@ enum Mode {
     },
     Sliding {
         widget: WidgetRef,
+        start_x: u16,
+        span: (u16, u16),
+        since: Instant,
     },
     Dragging {
         start_x: u16,
@@ -133,6 +143,12 @@ impl Default for TouchMachine {
     }
 }
 
+/// Whether a finger captured by a slider covering `span` has gone so far
+/// past it that it can no longer mean the slider.
+fn left_slider(span: (u16, u16), x: u16) -> bool {
+    x.saturating_add(SLIDER_ESCAPE_PX) < span.0 || x >= span.1.saturating_add(SLIDER_ESCAPE_PX)
+}
+
 impl TouchMachine {
     /// Forgets the touch in progress and any held-back tap, without firing
     /// anything.
@@ -143,9 +159,14 @@ impl TouchMachine {
 
     pub(crate) fn began(&mut self, x: u16, target: Target, now: Instant) -> Vec<Interaction> {
         self.last_input = (now, x);
-        if target.slider {
+        if let Some(span) = target.slider {
             if let Some(widget) = target.widget {
-                self.mode = Mode::Sliding { widget };
+                self.mode = Mode::Sliding {
+                    widget,
+                    start_x: x,
+                    span,
+                    since: now,
+                };
                 return vec![Interaction::Slide {
                     widget,
                     x,
@@ -170,7 +191,29 @@ impl TouchMachine {
     pub(crate) fn moved(&mut self, x: u16, now: Instant) -> Vec<Interaction> {
         self.last_input = (now, x);
         match &mut self.mode {
-            Mode::Sliding { widget } => vec![Interaction::Slide {
+            Mode::Sliding {
+                start_x,
+                span,
+                since,
+                ..
+            } if left_slider(*span, x) => {
+                let (start_x, since) = (*start_x, *since);
+                // `since` stays the touch-down: a slow drag along the slider
+                // that ends just past it is no flick.
+                self.mode = Mode::Dragging {
+                    start_x,
+                    last_x: x,
+                    since,
+                };
+                self.pending_tap = None;
+                vec![
+                    Interaction::SlideCancel,
+                    Interaction::Drag {
+                        dx: i32::from(start_x) - i32::from(x),
+                    },
+                ]
+            }
+            Mode::Sliding { widget, .. } => vec![Interaction::Slide {
                 widget: *widget,
                 x,
                 done: false,
@@ -212,7 +255,10 @@ impl TouchMachine {
         let mode = std::mem::replace(&mut self.mode, Mode::Idle);
         match mode {
             Mode::Idle => Vec::new(),
-            Mode::Sliding { widget } => vec![Interaction::Slide {
+            Mode::Sliding { span, .. } if left_slider(span, x) => {
+                vec![Interaction::SlideCancel]
+            }
+            Mode::Sliding { widget, .. } => vec![Interaction::Slide {
                 widget,
                 x,
                 done: true,
@@ -339,7 +385,7 @@ mod tests {
     fn button(idx: usize) -> Target {
         Target {
             widget: Some(w(idx)),
-            slider: false,
+            slider: None,
             double_tap: false,
             repeat: false,
         }
@@ -461,7 +507,7 @@ mod tests {
         let mut m = TouchMachine::default();
         let news = Target {
             widget: Some(w(0)),
-            slider: false,
+            slider: None,
             double_tap: true,
             repeat: false,
         };
@@ -500,7 +546,7 @@ mod tests {
         let mut m = TouchMachine::default();
         let slider = Target {
             widget: Some(w(3)),
-            slider: true,
+            slider: Some((480, 640)),
             double_tap: false,
             repeat: false,
         };
@@ -514,21 +560,91 @@ mod tests {
             }]
         );
         assert_eq!(
-            m.moved(300, t),
+            m.moved(600, t),
             vec![Interaction::Slide {
                 widget: w(3),
-                x: 300,
+                x: 600,
                 done: false
             }]
         );
+        // Overshooting an end still means the slider.
         assert_eq!(
-            m.ended(310, t),
+            m.ended(470, t),
             vec![Interaction::Slide {
                 widget: w(3),
-                x: 310,
+                x: 470,
                 done: true
             }]
         );
+    }
+
+    fn on_a_slider() -> Target {
+        Target {
+            slider: Some((480, 640)),
+            ..button(3)
+        }
+    }
+
+    #[test]
+    fn a_swipe_that_leaves_the_slider_moves_the_page() {
+        let mut m = TouchMachine::default();
+        let t = Instant::now();
+        m.began(600, on_a_slider(), t);
+        m.moved(520, t + Duration::from_millis(40));
+        assert_eq!(
+            m.moved(460, t + Duration::from_millis(80)),
+            vec![Interaction::SlideCancel, Interaction::Drag { dx: 140 }],
+            "the page has come along from where the finger went down"
+        );
+        assert_eq!(
+            m.moved(440, t + Duration::from_millis(120)),
+            vec![Interaction::Drag { dx: 160 }]
+        );
+        assert_eq!(
+            m.ended(430, t + Duration::from_millis(160)),
+            vec![Interaction::DragEnd {
+                commit: Some(true),
+                dx: 170
+            }]
+        );
+    }
+
+    #[test]
+    fn a_slow_drag_off_the_slider_is_no_flick() {
+        let mut m = TouchMachine::default();
+        let t = Instant::now();
+        m.began(600, on_a_slider(), t);
+        m.moved(467, t + Duration::from_secs(2));
+        assert_eq!(
+            m.ended(467, t + Duration::from_millis(2_100)),
+            vec![Interaction::DragEnd {
+                commit: None,
+                dx: 133
+            }]
+        );
+    }
+
+    #[test]
+    fn a_swipe_off_a_slider_works_both_ways() {
+        let mut m = TouchMachine::default();
+        let t = Instant::now();
+        let target = Target {
+            slider: Some((160, 320)),
+            ..button(3)
+        };
+        m.began(200, target, t);
+        assert_eq!(
+            m.moved(340, t + Duration::from_millis(60)),
+            vec![Interaction::SlideCancel, Interaction::Drag { dx: -140 }]
+        );
+    }
+
+    #[test]
+    fn a_lift_far_from_the_slider_sets_nothing() {
+        let mut m = TouchMachine::default();
+        let t = Instant::now();
+        m.began(600, on_a_slider(), t);
+        assert_eq!(m.ended(300, t), vec![Interaction::SlideCancel]);
     }
 
     #[test]

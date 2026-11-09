@@ -1236,10 +1236,10 @@ pub fn update_news_config(
     write_sensor_config(config)
 }
 
-/// Stores a renewed Discord token, keeping everything else as stored on
-/// disk. Does nothing when the application changed or was removed since
-/// (Studio wins), or when sensors.json does not parse.
-pub fn store_discord_token(client_id: &str, token: DiscordToken) -> std::io::Result<()> {
+/// Stores a token, keeping everything else as stored on disk. False when
+/// the application changed or was removed since (Studio wins); nothing is
+/// written then. Refuses a sensors.json that does not parse.
+pub fn store_discord_token(client_id: &str, token: DiscordToken) -> std::io::Result<bool> {
     update_sensor_config(|config| match config.discord.as_mut() {
         Some(app) if app.client_id == client_id => {
             app.token = Some(token);
@@ -1247,7 +1247,7 @@ pub fn store_discord_token(client_id: &str, token: DiscordToken) -> std::io::Res
         }
         _ => Err(()),
     })
-    .map(drop)
+    .map(|stored| stored.is_ok())
 }
 
 fn write_sensor_config(mut config: SensorConfig) -> std::io::Result<SensorConfig> {
@@ -3744,12 +3744,12 @@ PID PPID COMMAND RSS %CPU COMMAND
         .unwrap();
         // A renewed token lands, a token for an application since replaced
         // does not.
-        store_discord_token("42", token.clone()).unwrap();
+        assert!(store_discord_token("42", token.clone()).unwrap());
         let stored = load_sensor_config().discord.unwrap();
         assert_eq!(stored.token.as_ref().unwrap().access_token, "fresh");
         let mut other = token;
         other.access_token = "stale".into();
-        store_discord_token("43", other).unwrap();
+        assert!(!store_discord_token("43", other).unwrap());
         let stored = load_sensor_config().discord.unwrap();
         assert_eq!(stored.token.unwrap().access_token, "fresh");
 

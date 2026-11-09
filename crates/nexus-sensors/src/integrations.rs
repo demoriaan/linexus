@@ -49,7 +49,8 @@ pub fn send_ifttt_webhook(
     if !request.url.starts_with("https://") {
         return Err(format!("{} is not an https address", request.url));
     }
-    let output = std::process::Command::new("curl")
+    let config = curl_url_config(&request.url)?;
+    let mut child = std::process::Command::new("curl")
         .args([
             "--fail",
             "--silent",
@@ -62,16 +63,36 @@ pub fn send_ifttt_webhook(
             "Content-Type: application/json",
             "--data",
             &request.body.to_string(),
-            // The address (with the user's key in it) is never an option.
-            "--",
-            &request.url,
+            // The address holds the user's key, and a command line can be
+            // read by every account on the computer.
+            "--config",
+            "-",
         ])
-        .output()
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    if let Some(mut stdin) = child.stdin.take() {
+        std::io::Write::write_all(&mut stdin, config.as_bytes())
+            .map_err(|error| error.to_string())?;
+    }
+    let output = child
+        .wait_with_output()
         .map_err(|error| error.to_string())?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).into_owned());
     }
     Ok(request)
+}
+
+/// A curl config that names the address, so it stays off the command line.
+fn curl_url_config(url: &str) -> Result<String, String> {
+    if url.contains(['\n', '\r', '\0']) {
+        return Err("the address must not contain line breaks".into());
+    }
+    let escaped = url.replace('\\', "\\\\").replace('"', "\\\"");
+    Ok(format!("url = \"{escaped}\"\n"))
 }
 
 pub fn build_mqtt_message(config: &MqttPublishConfig, card: &SensorCard) -> MqttMessage {
@@ -177,4 +198,18 @@ fn render_integration_template(template: &str, card: &SensorCard) -> String {
         .replace("{title}", &card.title)
         .replace("{url}", card.url.as_deref().unwrap_or(""))
         .replace("{status}", card.status.as_deref().unwrap_or(""))
+}
+
+#[cfg(test)]
+mod curl_config_tests {
+    use super::curl_url_config;
+
+    #[test]
+    fn the_address_cannot_add_options() {
+        assert_eq!(
+            curl_url_config("https://x/with/key/a\"b\\c").unwrap(),
+            "url = \"https://x/with/key/a\\\"b\\\\c\"\n"
+        );
+        assert!(curl_url_config("https://x\nurl = file:///etc/passwd").is_err());
+    }
 }

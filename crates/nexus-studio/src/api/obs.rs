@@ -21,11 +21,15 @@ pub fn route(request: &Request) -> Option<Response> {
 struct ServerRequest {
     host: String,
     port: u16,
-    #[serde(default)]
-    password: String,
+    /// Left out: the saved password, for the server it was saved for.
+    password: Option<String>,
 }
 
-fn checked(request: ServerRequest) -> Result<ObsServer, Response> {
+fn stored_server() -> Option<ObsServer> {
+    nexus_sensors::load_sensor_config().obs_server
+}
+
+fn checked(request: ServerRequest, stored: Option<&ObsServer>) -> Result<ObsServer, Response> {
     let host = request.host.trim();
     // An IPv6 address may come in brackets, as in a URL.
     let host = host
@@ -52,10 +56,16 @@ fn checked(request: ServerRequest) -> Result<ObsServer, Response> {
     if request.port == 0 {
         return Err(Response::error(400, "port must be between 1 and 65535"));
     }
+    let password = request.password.unwrap_or_else(|| {
+        stored
+            .filter(|server| server.host == host && server.port == request.port)
+            .map(|server| server.password.clone())
+            .unwrap_or_default()
+    });
     Ok(ObsServer {
         host,
         port: request.port,
-        password: request.password,
+        password,
     })
 }
 
@@ -65,7 +75,9 @@ fn unavailable(error: &ObsError) -> Response {
 }
 
 fn test(body: &[u8]) -> Response {
-    let server = match parse_json(body, "OBS server").and_then(checked) {
+    let stored = stored_server();
+    let parsed = parse_json(body, "OBS server");
+    let server = match parsed.and_then(|request| checked(request, stored.as_ref())) {
         Ok(server) => server,
         Err(response) => return response,
     };
@@ -109,7 +121,11 @@ fn save(body: &[u8]) -> Response {
         Ok(request) => request,
         Err(response) => return response,
     };
-    let server = match request.map(checked).transpose() {
+    let stored = stored_server();
+    let server = match request
+        .map(|request| checked(request, stored.as_ref()))
+        .transpose()
+    {
         Ok(server) => server,
         Err(response) => return response,
     };
@@ -121,9 +137,10 @@ fn save(body: &[u8]) -> Response {
     } else {
         "OBS connection removed"
     };
-    let mut config = nexus_sensors::load_sensor_config();
-    config.obs_server = server;
-    match nexus_sensors::save_sensor_config(config) {
+    match nexus_sensors::update_sensor_config(|config| {
+        config.obs_server = server;
+        Ok::<_, ()>(())
+    }) {
         Ok(_) => Response::json(200, &json!({ "ok": true, "message": message })),
         Err(error) => Response::error(500, format!("failed to save sensors.json: {error}")),
     }
@@ -135,25 +152,34 @@ mod tests {
 
     #[test]
     fn checks_the_connection_fields() {
-        let ok = checked(ServerRequest {
-            host: " localhost ".into(),
-            port: 4455,
-            password: "secret".into(),
-        })
+        let ok = checked(
+            ServerRequest {
+                host: " localhost ".into(),
+                port: 4455,
+                password: Some("secret".into()),
+            },
+            None,
+        )
         .unwrap();
         assert_eq!(ok.host, "localhost");
-        let v6 = checked(ServerRequest {
-            host: "[::1]".into(),
-            port: 4455,
-            password: String::new(),
-        })
+        let v6 = checked(
+            ServerRequest {
+                host: "[::1]".into(),
+                port: 4455,
+                password: None,
+            },
+            None,
+        )
         .unwrap();
         assert_eq!(v6.host, "::1");
-        let scoped = checked(ServerRequest {
-            host: "fe80::1%eth0".into(),
-            port: 4455,
-            password: String::new(),
-        });
+        let scoped = checked(
+            ServerRequest {
+                host: "fe80::1%eth0".into(),
+                port: 4455,
+                password: None,
+            },
+            None,
+        );
         assert_eq!(scoped.unwrap().host, "fe80::1%eth0");
         for (host, port) in [
             ("", 4455),
@@ -162,13 +188,35 @@ mod tests {
             ("localhost:4455", 4455),
             ("[localhost]:4455", 4455),
         ] {
-            assert!(checked(ServerRequest {
+            let request = ServerRequest {
                 host: host.into(),
                 port,
-                password: String::new(),
-            })
-            .is_err());
+                password: None,
+            };
+            assert!(checked(request, None).is_err());
         }
+    }
+
+    #[test]
+    fn the_saved_password_stays_with_its_server() {
+        let stored = ObsServer {
+            host: "localhost".into(),
+            port: 4455,
+            password: "saved".into(),
+        };
+        let with = |host: &str, port, password: Option<&str>| {
+            let request = ServerRequest {
+                host: host.into(),
+                port,
+                password: password.map(Into::into),
+            };
+            checked(request, Some(&stored)).ok().unwrap().password
+        };
+        assert_eq!(with("localhost", 4455, None), "saved");
+        assert_eq!(with("evil.example", 4455, None), "");
+        assert_eq!(with("localhost", 4456, None), "");
+        assert_eq!(with("localhost", 4455, Some("")), "");
+        assert_eq!(with("localhost", 4455, Some("new")), "new");
     }
 
     #[test]

@@ -6,6 +6,7 @@ mod api;
 mod assets;
 mod http;
 mod mime;
+mod peer;
 mod providers;
 mod state;
 
@@ -177,6 +178,11 @@ impl Drop for Slot {
 fn handle_connection(mut stream: TcpStream, state: &AppState) {
     let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
     let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
+    if !peer::allowed(&stream) {
+        let refused = Response::error(403, "Studio only answers the user who started it");
+        let _ = refused.write_to(&mut stream);
+        return;
+    }
     let deadline = Instant::now() + REQUEST_DEADLINE;
     let response = match http::read_request(&mut stream, deadline, api::body_limit) {
         Ok(request) => respond(&request, state),

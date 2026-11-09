@@ -46,9 +46,13 @@ const RESYNC_EVERY: Duration = Duration::from_secs(20);
 const CHANNELS_EVERY: Duration = Duration::from_secs(300);
 /// Voice channels followed per server.
 const MAX_CHANNELS: usize = 30;
-/// How long a notification waits for its picture and for the desktop's
-/// do-not-disturb answer before it goes out without them.
-const NOTIFICATION_WAIT: Duration = Duration::from_millis(1_500);
+/// How long a notification waits for its picture before it goes out without.
+const PICTURE_WAIT: Duration = Duration::from_millis(1_500);
+/// How long it waits for the desktop to say whether do not disturb is on.
+/// Reading that can take seconds; without an answer the message is dropped.
+const DESKTOP_ANSWER_WAIT: Duration = Duration::from_secs(5);
+/// How long dropping `Discord` waits for the worker to send what is queued.
+const STOP_WAIT: Duration = Duration::from_millis(500);
 /// How long after a message over RPC its desktop copy can still arrive.
 const COPY_WINDOW: Duration = Duration::from_secs(5);
 /// A session shorter than this counts as a failed attempt to connect.
@@ -115,6 +119,19 @@ pub(crate) struct DiscordNotification {
     pub(crate) direct: bool,
 }
 
+/// The names the Discord app goes by on the desktop, lower case. Muting any
+/// of them mutes its messages, and desktop notifications under any of them
+/// can be copies.
+pub(crate) const DISCORD_NAMES: [&str; 7] = [
+    "discord",
+    "discord canary",
+    "discordcanary",
+    "discord ptb",
+    "discordptb",
+    "com.discordapp.discord",
+    "com.discordapp.discordcanary",
+];
+
 /// Message texts Discord sent over RPC a moment ago. Only a desktop
 /// notification that repeats one of them is a copy: the rest (calls, friend
 /// requests, a Discord that was not asked) must still show.
@@ -162,8 +179,10 @@ struct Status {
     /// Discord sends its notifications here; the desktop copies of them
     /// can be left out.
     notifying: bool,
-    /// Mute the microphone on the next connection, until this time.
+    /// Mute the microphone as soon as Discord answers, until this time.
     remute_until: Option<Instant>,
+    /// The worker sent what was queued and stopped.
+    finished: bool,
 }
 
 pub(crate) struct Discord {
@@ -197,6 +216,7 @@ impl Discord {
             logger: logger.clone(),
             load: Box::new(|| nexus_sensors::load_sensor_config().discord),
             images: images::Images::start(),
+            policy: worker::Policy::start(),
         };
         let started = thread::Builder::new()
             .name("discord".into())
@@ -293,8 +313,16 @@ impl Discord {
 
 impl Drop for Discord {
     fn drop(&mut self) {
-        self.lock().stop = true;
-        self.shared.wake.notify_all();
+        let shared = self.shared.clone();
+        let mut status = shared.status.lock().unwrap_or_else(PoisonError::into_inner);
+        status.stop = true;
+        shared.wake.notify_all();
+        if self.commands.is_some() {
+            // A last mute may still be on its way to Discord.
+            let _ = shared
+                .wake
+                .wait_timeout_while(status, STOP_WAIT, |status| !status.finished);
+        }
     }
 }
 

@@ -21,6 +21,7 @@ pub(super) struct Worker {
     pub(super) logger: nexus_events::EventLogger,
     pub(super) load: LoadApp,
     pub(super) images: Images,
+    pub(super) policy: Policy,
 }
 
 /// A notification waiting for its picture and for the desktop's answer on
@@ -28,26 +29,27 @@ pub(super) struct Worker {
 struct Pending {
     notification: DiscordNotification,
     icon: Option<String>,
-    shows: Receiver<bool>,
+    /// Which question to the desktop this waits for.
+    asked: u64,
     decided: Option<bool>,
-    give_up: Instant,
+    /// The picture is left out after this.
+    picture_by: Instant,
+    /// Without an answer by then, the message is dropped.
+    decide_by: Instant,
 }
 
 impl Pending {
-    /// Takes in the desktop's answer. True once this can leave the queue:
-    /// everything is in, or waiting longer would make it late.
-    fn settled(&mut self, images: &Images, now: Instant) -> bool {
-        if self.decided.is_none() {
-            self.decided = self.shows.try_recv().ok();
-        }
+    /// True once this can leave the queue: everything is in, or waiting
+    /// longer would make it late.
+    fn settled(&self, images: &Images, now: Instant) -> bool {
         let picture = self.icon.as_deref().is_none_or(|url| images.answered(url));
-        (self.decided.is_some() && picture) || now >= self.give_up
+        (self.decided.is_some() && (picture || now >= self.picture_by)) || now >= self.decide_by
     }
 
-    /// Without an answer the desktop is not asked to hold anything back,
-    /// as with a notification server that has no do-not-disturb.
+    /// Shows only on a yes: no answer means the desktop could not say
+    /// whether do not disturb is on, and message text must not show then.
     fn into_shown(mut self, images: &Images) -> Option<DiscordNotification> {
-        if self.decided == Some(false) {
+        if self.decided != Some(true) {
             return None;
         }
         self.notification.icon = self.icon.as_deref().and_then(|url| images.get(url));
@@ -55,17 +57,59 @@ impl Pending {
     }
 }
 
-/// Asks the desktop on its own thread: a message shows only when a
-/// notification from Discord could pop up now (do not disturb).
-fn ask_desktop() -> Receiver<bool> {
-    let (answer, shows) = mpsc::channel();
-    let _ = thread::Builder::new()
-        .name("discord-policy".into())
-        .spawn(move || {
-            let policy = nexus_sensors::PopupPolicy::read(Some("discord"), None);
-            let _ = answer.send(policy.shows(nexus_sensors::Urgency::Normal));
-        });
-    shows
+/// Asks the desktop on one long-lived thread whether a notification from
+/// Discord could pop up now: a bus that hangs must not hold up voice, nor
+/// pile up threads.
+pub(super) struct Policy {
+    /// Dropping this ends the thread.
+    jobs: Sender<(u64, String)>,
+    answers: Receiver<(u64, bool)>,
+    next: u64,
+}
+
+impl Policy {
+    pub(super) fn start() -> Self {
+        let (jobs, asked) = mpsc::channel::<(u64, String)>();
+        let (answer, answers) = mpsc::channel();
+        let _ = thread::Builder::new()
+            .name("discord-policy".into())
+            .spawn(move || {
+                while let Ok(first) = asked.recv() {
+                    // Questions that piled up get the same answer.
+                    let mut batch = vec![first];
+                    batch.extend(asked.try_iter());
+                    let policy = nexus_sensors::PopupPolicy::read(
+                        batch.last().map(|(_, app)| app.as_str()),
+                        None,
+                    );
+                    let shows = policy.shows(nexus_sensors::Urgency::Normal);
+                    for (id, _) in batch {
+                        if answer.send((id, shows)).is_err() {
+                            return;
+                        }
+                    }
+                }
+            });
+        Self {
+            jobs,
+            answers,
+            next: 0,
+        }
+    }
+
+    fn ask(&mut self, app: &str) -> u64 {
+        self.next += 1;
+        let _ = self.jobs.send((self.next, app.to_string()));
+        self.next
+    }
+
+    fn answer(&self, pending: &mut [Pending]) {
+        for (id, shows) in self.answers.try_iter() {
+            if let Some(item) = pending.iter_mut().find(|item| item.asked == id) {
+                item.decided = Some(shows);
+            }
+        }
+    }
 }
 
 impl Worker {
@@ -82,6 +126,12 @@ impl Worker {
     }
 
     pub(super) fn run(mut self) {
+        self.serve();
+        self.lock().finished = true;
+        self.shared.wake.notify_all();
+    }
+
+    fn serve(&mut self) {
         let mut retry = RETRY_MIN;
         let mut retry_at = Instant::now();
         loop {
@@ -249,6 +299,9 @@ impl Worker {
             if let Err(error) = self.run_commands(&mut discord, &mut tracked) {
                 break Some(error);
             }
+            if let Err(error) = self.remute(&mut discord) {
+                break Some(error);
+            }
             if Instant::now() >= resync_at {
                 resync_at = Instant::now() + RESYNC_EVERY;
                 if let Err(error) = Self::sync_self(&mut discord, &mut tracked)
@@ -302,6 +355,11 @@ impl Worker {
             self.fetch_avatars(&tracked);
             self.lock().info = Some(tracked.info(&self.images));
         };
+        // Nothing wants Discord any more; what was queued still goes out, a
+        // microphone to mute above all.
+        if ended.is_none() {
+            let _ = self.run_commands(&mut discord, &mut tracked);
+        }
         {
             let mut status = self.lock();
             status.info = None;
@@ -312,9 +370,10 @@ impl Worker {
 
     /// Hands over the notifications that are ready.
     fn deliver(&self, pending: &mut Vec<Pending>) {
+        self.policy.answer(pending);
         let now = Instant::now();
         let mut waiting = Vec::with_capacity(pending.len());
-        for mut item in pending.drain(..) {
+        for item in pending.drain(..) {
             if !item.settled(&self.images, now) {
                 waiting.push(item);
                 continue;
@@ -401,9 +460,10 @@ impl Worker {
                 direct,
             },
             icon,
-            shows: ask_desktop(),
+            asked: self.policy.ask(discord.desktop_id()),
             decided: None,
-            give_up: Instant::now() + NOTIFICATION_WAIT,
+            picture_by: Instant::now() + PICTURE_WAIT,
+            decide_by: Instant::now() + DESKTOP_ANSWER_WAIT,
         })
     }
 
@@ -609,5 +669,49 @@ impl Worker {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pending(icon: Option<&str>, decided: Option<bool>, t: Instant) -> Pending {
+        Pending {
+            notification: DiscordNotification {
+                title: "Ada".into(),
+                body: "hello".into(),
+                icon: None,
+                link: None,
+                direct: true,
+            },
+            icon: icon.map(str::to_string),
+            asked: 1,
+            decided,
+            picture_by: t + PICTURE_WAIT,
+            decide_by: t + DESKTOP_ANSWER_WAIT,
+        }
+    }
+
+    #[test]
+    fn a_message_shows_only_when_the_desktop_says_it_may() {
+        let images = Images::with_fetch(Box::new(|_| None));
+        let t = Instant::now();
+        assert!(pending(None, Some(true), t).into_shown(&images).is_some());
+        assert!(pending(None, Some(false), t).into_shown(&images).is_none());
+        // No answer: it waits, and when time is up nothing shows.
+        let silent = pending(None, None, t);
+        assert!(!silent.settled(&images, t));
+        assert!(silent.settled(&images, t + DESKTOP_ANSWER_WAIT));
+        assert!(silent.into_shown(&images).is_none());
+    }
+
+    #[test]
+    fn a_yes_waits_for_the_picture_for_a_moment_then_goes_without() {
+        let images = Images::with_fetch(Box::new(|_| None));
+        let t = Instant::now();
+        let picture = pending(Some("slow"), Some(true), t);
+        assert!(!picture.settled(&images, t));
+        assert!(picture.settled(&images, t + PICTURE_WAIT));
     }
 }

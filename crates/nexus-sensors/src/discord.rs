@@ -228,8 +228,9 @@ impl VoiceMember {
 /// The picture Discord shows for a user: their own, or one of the default
 /// avatars, picked the way Discord picks it.
 pub fn avatar_url(user_id: &str, avatar: Option<&str>, discriminator: Option<&str>) -> String {
+    let plain_id = !user_id.is_empty() && user_id.bytes().all(|b| b.is_ascii_digit());
     if let Some(hash) = avatar.filter(|hash| {
-        !hash.is_empty() && hash.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        plain_id && !hash.is_empty() && hash.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
     }) {
         return format!("https://cdn.discordapp.com/avatars/{user_id}/{hash}.png?size=64");
     }
@@ -295,6 +296,8 @@ pub struct DiscordConnection {
     events: VecDeque<DiscordEvent>,
     /// Who signed in, once AUTHENTICATE answered.
     user_id: Option<String>,
+    /// The name the desktop knows this Discord by.
+    desktop_id: &'static str,
 }
 
 impl DiscordConnection {
@@ -315,6 +318,7 @@ impl DiscordConnection {
                 nonce: 0,
                 events: VecDeque::new(),
                 user_id: None,
+                desktop_id: desktop_id_of(&path),
             };
             match connection.handshake(client_id, Instant::now() + timeout) {
                 Ok(true) => return Ok(connection),
@@ -392,6 +396,11 @@ impl DiscordConnection {
             .or_else(|| user["username"].as_str())
             .unwrap_or_default()
             .to_string())
+    }
+
+    /// The desktop file id of this Discord, for its notification settings.
+    pub fn desktop_id(&self) -> &'static str {
+        self.desktop_id
     }
 
     /// The signed-in user's id.
@@ -679,13 +688,21 @@ fn unix_now() -> u64 {
 /// never as SVG: the notification's icon is whatever the event says it is.
 pub fn trusted_image_url(url: &str) -> Option<&str> {
     let path = url.strip_prefix("https://cdn.discordapp.com/")?;
+    // curl expands brackets and braces in a URL into many requests.
+    let plain = path
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"/._-?=&%".contains(&b));
     let file = path.split(['?', '#']).next().unwrap_or_default();
-    (!file.is_empty() && !file.to_ascii_lowercase().ends_with(".svg")).then_some(url)
+    (plain && !file.is_empty() && !file.to_ascii_lowercase().ends_with(".svg")).then_some(url)
 }
 
 /// Servers with their voice channels, for Studio's pickers.
-pub fn discord_guilds(app: &DiscordApp) -> Result<Vec<DiscordGuild>, DiscordError> {
-    let mut connection = sign_in(app, COMMAND_TIMEOUT)?.connection;
+pub fn discord_guilds(
+    app: &DiscordApp,
+) -> Result<(Vec<DiscordGuild>, Option<String>), DiscordError> {
+    let signed = sign_in(app, COMMAND_TIMEOUT)?;
+    let unsaved = signed.unsaved;
+    let mut connection = signed.connection;
     let guilds = guild_list(&connection.command("GET_GUILDS", json!({}))?);
     let mut out = Vec::with_capacity(guilds.len());
     for (id, name) in guilds {
@@ -700,7 +717,21 @@ pub fn discord_guilds(app: &DiscordApp) -> Result<Vec<DiscordGuild>, DiscordErro
             voice_channels,
         });
     }
-    Ok(out)
+    Ok((out, unsaved))
+}
+
+/// A sandboxed Discord says which build it is by the folder of its socket.
+fn desktop_id_of(socket: &Path) -> &'static str {
+    let path = socket.to_string_lossy();
+    if path.contains("com.discordapp.DiscordCanary") {
+        "com.discordapp.DiscordCanary"
+    } else if path.contains("com.discordapp.DiscordPTB") {
+        "com.discordapp.DiscordPTB"
+    } else if path.contains("com.discordapp.Discord") {
+        "com.discordapp.Discord"
+    } else {
+        "discord"
+    }
 }
 
 /// Every place a Discord app may listen, in the order to try them. Paths
@@ -996,6 +1027,23 @@ mod tests {
     }
 
     #[test]
+    fn a_sandboxed_discord_is_known_by_its_folder() {
+        for (socket, id) in [
+            ("/run/user/1/discord-ipc-0", "discord"),
+            (
+                "/run/user/1/app/com.discordapp.Discord/discord-ipc-0",
+                "com.discordapp.Discord",
+            ),
+            (
+                "/run/user/1/app/com.discordapp.DiscordCanary/discord-ipc-0",
+                "com.discordapp.DiscordCanary",
+            ),
+        ] {
+            assert_eq!(desktop_id_of(Path::new(socket)), id);
+        }
+    }
+
+    #[test]
     fn only_sockets_of_the_same_user_are_trusted() {
         assert!(check_peer(1000, 1000).is_ok());
         let refused = check_peer(1001, 1000).unwrap_err();
@@ -1015,6 +1063,8 @@ mod tests {
             "https://cdn.discordapp.com/",
             "https://cdn.discordapp.com/a.SVG",
             "https://cdn.discordapp.com/a.svg?x=1",
+            "https://cdn.discordapp.com/[1-99999].png",
+            "https://cdn.discordapp.com/{a,b}.png",
         ] {
             assert_eq!(trusted_image_url(bad), None, "{bad}");
         }
@@ -1095,6 +1145,7 @@ mod tests {
             nonce: 0,
             events: VecDeque::new(),
             user_id: None,
+            desktop_id: "discord",
         };
         assert!(connection
             .handshake("42", Instant::now() + Duration::from_secs(5))

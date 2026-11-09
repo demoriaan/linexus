@@ -1,6 +1,6 @@
 // Device: connection and daemon state, how the strip behaves, setup checks
 // and the event log.
-import { html, useEffect, useState } from "../lib/html.js";
+import { html, useEffect, useRef, useState } from "../lib/html.js";
 import { api } from "../lib/api.js";
 import { t, hasText } from "../lib/i18n.js";
 import { Icon } from "../lib/icons.js";
@@ -118,6 +118,23 @@ function Behaviour() {
 }
 
 /**
+ * Whether this tab started the calibration. Kept per tab, so it survives a
+ * reload during the run; held in memory too for browsers that block storage.
+ */
+const STARTED_HERE = "linexus-calibration-started";
+let startedHere = false;
+function markStarted(on) {
+  startedHere = on;
+  try {
+    if (on) sessionStorage.setItem(STARTED_HERE, "1");
+    else sessionStorage.removeItem(STARTED_HERE);
+  } catch { /* storage blocked: the variable is enough */ }
+}
+function wasStarted() {
+  try { return startedHere || sessionStorage.getItem(STARTED_HERE) !== null; } catch { return startedHere; }
+}
+
+/**
  * How far the panel reads touches from the finger: measured by the
  * calibration (marks on the strip to touch one after the other) or set by
  * hand. The daemon applies it to the strip's own touches only.
@@ -137,15 +154,40 @@ function TouchCorrection() {
     const timer = setInterval(() => call("status").catch(() => setCalibration(null)), 400);
     return () => clearInterval(timer);
   }, [running]);
-  // Leaving the page ends a calibration nobody watches any more.
-  useEffect(() => () => { api.post("/api/daemon/calibrate", { action: "cancel" }).catch(() => {}); }, []);
-  const start = () => call("start").catch((e) => toast(e.message, "error"));
+  // A reload finds the calibration that is still running.
+  useEffect(() => {
+    api.post("/api/daemon/calibrate", { action: "status" })
+      .then((data) => { if (data.daemon?.calibration?.state === "running") setCalibration(data.daemon.calibration); })
+      .catch(() => {});
+  }, []);
+  // Leaving the page ends a calibration nobody watches any more, but only
+  // one this tab was following.
+  const following = useRef(false);
+  following.current = running;
+  useEffect(() => () => {
+    if (following.current) api.post("/api/daemon/calibrate", { action: "cancel" }).catch(() => {});
+    markStarted(false);
+  }, []);
+  const start = () => {
+    markStarted(true);
+    call("start").catch((e) => toast(e.message, "error"));
+  };
   const signed = (n) => (n > 0 ? `+${n}` : `${n}`);
   const slider = (key) => html`
     <${Field} label=${t(`touch.${key}`, { n: touch[key] > 0 ? `+${touch[key]}` : touch[key] })}>
       <input type="range" min="-100" max="100" step="1" value=${touch[key]} onInput=${(e) => set({ [key]: Number(e.currentTarget.value) }, `touch-${key}`)} />
     <//>`;
   const done = calibration?.state === "done";
+  // A finished calibration counts right away; "Undo" brings the old values back.
+  const before = useRef(null);
+  useEffect(() => {
+    // Only the tab that started it: two would save over each other.
+    if (!done || !wasStarted()) return;
+    markStarted(false);
+    before.current = { left: touch.left, right: touch.right };
+    set({ left: calibration.left, right: calibration.right });
+  }, [done]);
+  const undo = () => { set(before.current); setCalibration(null); };
   const exact = done && calibration.left === 0 && calibration.right === 0;
   return html`
     <hr class="divider" />
@@ -161,9 +203,8 @@ function TouchCorrection() {
         <span class="ok-text">${exact
           ? t("touch.accurate")
           : t("touch.measured", { left: signed(calibration.left), right: signed(calibration.right) })}</span>
-        ${(calibration.left !== touch.left || calibration.right !== touch.right) && html`
-          <button class="btn small primary" onClick=${() => { set({ left: calibration.left, right: calibration.right }); setCalibration(null); toast(t("touch.applied"), "ok"); }}>${t("touch.apply")}</button>`}
-        <button class="btn small ghost" onClick=${() => setCalibration(null)}>${t("touch.discard")}</button>
+        ${before.current && (before.current.left !== calibration.left || before.current.right !== calibration.right) && html`
+          <button class="btn small ghost" onClick=${undo}>${t("touch.undo")}</button>`}
       </div>`}
     ${calibration?.state === "failed" && html`<span class="bad-text">${t("touch.failed")}</span>`}
     ${calibration?.state === "cancelled" && html`<span class="hint">${t("touch.cancelled")}</span>`}

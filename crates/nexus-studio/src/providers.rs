@@ -36,9 +36,10 @@ pub fn save_home_assistant_server(server: Option<HomeAssistantServer>) -> Result
     if let Some(problem) = nexus_sensors::sensor_config_problem() {
         return Err(problem);
     }
-    let mut config = nexus_sensors::load_sensor_config();
-    config.home_assistant_server = server;
-    nexus_sensors::save_sensor_config(config)
-        .map(|_| ())
-        .map_err(|error| format!("failed to save sensors.json: {error}"))
+    nexus_sensors::update_sensor_config(|config| {
+        config.home_assistant_server = server;
+        Ok::<_, ()>(())
+    })
+    .map(|_| ())
+    .map_err(|error| format!("failed to save sensors.json: {error}"))
 }

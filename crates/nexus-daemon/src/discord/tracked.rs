@@ -85,7 +85,7 @@ impl Tracked {
             automatic_gain: self.automatic_gain,
             link: self.link.filter(|_| self.channel.is_some()),
             focus: None,
-            mute_badge: false,
+            mic_badge: false,
             rotation: 0,
             self_id: self.self_id.clone(),
         }

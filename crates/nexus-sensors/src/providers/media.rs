@@ -405,6 +405,7 @@ pub fn fetch_art_bytes(url: &str) -> Option<Vec<u8>> {
         .args([
             "--fail",
             "--silent",
+            "--globoff",
             "--location",
             "--proto",
             "=http,https",

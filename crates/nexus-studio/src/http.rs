@@ -14,7 +14,8 @@ const MAX_HEADER_BYTES: usize = 64 * 1024;
 /// Sent with every response. The UI only talks to its own origin, so
 /// anything else (inline scripts, foreign hosts) is refused by the browser.
 pub const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; img-src 'self' data: blob:; \
-style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self'";
+style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self'; \
+frame-ancestors 'none'";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Request {

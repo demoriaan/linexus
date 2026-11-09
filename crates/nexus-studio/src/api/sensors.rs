@@ -8,10 +8,17 @@ use crate::providers::{self, HomeAssistantServer};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-/// Fields Studio edits through dedicated endpoints. A full sensors.json save
-/// from a view that does not know them keeps the stored values instead of
-/// silently dropping them.
-const PRESERVED_FIELDS: [&str; 2] = ["home_assistant_server", "obs_server"];
+/// Fields Studio edits through dedicated endpoints. The browser only ever
+/// has their redacted copy, so a full sensors.json save keeps what is stored.
+const PRESERVED_FIELDS: [&str; 3] = ["discord", "home_assistant_server", "obs_server"];
+
+/// Secrets inside the lists the browser edits: `(section, field, fields that
+/// say where the secret is sent)`.
+const LIST_SECRETS: [(&str, &str, &[&str]); 3] = [
+    ("home_assistant", "token", &["base_url"]),
+    ("ifttt", "key", &[]),
+    ("mqtt", "password", &["host", "port"]),
+];
 
 pub fn route(request: &Request) -> Option<Response> {
     let path = request.path.as_str();
@@ -122,32 +129,57 @@ fn config() -> Response {
 }
 
 fn save_config(body: &[u8]) -> Response {
-    let mut incoming: Value = match parse_json(body, "sensor config") {
+    let incoming: Value = match parse_json(body, "sensor config") {
         Ok(value) => value,
         Err(response) => return response,
     };
-    preserve_fields(&mut incoming, &stored_sensor_json());
-    let config: nexus_sensors::SensorConfig = match serde_json::from_value(incoming) {
-        Ok(config) => config,
-        Err(error) => return Response::error(400, format!("invalid sensor config: {error}")),
-    };
-    match nexus_sensors::save_sensor_config(config) {
-        Ok(config) => saved(config, "Sensor configuration saved"),
+    // Read, merge and write under one lock: the daemon may store a renewed
+    // Discord token at any moment. A file that does not parse is refused,
+    // since the browser's copy would replace everything in it.
+    let updated = nexus_sensors::update_sensor_config(|stored| {
+        let mut incoming = incoming;
+        let current = serde_json::to_value(&*stored).unwrap_or(Value::Null);
+        preserve_fields(&mut incoming, &current);
+        *stored = serde_json::from_value(incoming)
+            .map_err(|error| format!("invalid sensor config: {error}"))?;
+        Ok::<_, String>(())
+    });
+    match updated {
+        Ok(Ok(())) => saved(
+            nexus_sensors::load_sensor_config(),
+            "Sensor configuration saved",
+        ),
+        Ok(Err(problem)) => Response::error(400, problem),
         Err(error) => Response::error(500, format!("failed to save sensor config: {error}")),
     }
 }
 
-fn stored_sensor_json() -> Value {
-    std::fs::read_to_string(nexus_sensors::sensor_config_path())
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or(Value::Null)
+/// Replaces a secret with `has_<field>`: the page can say one is saved.
+fn hide_secret(object: &mut serde_json::Map<String, Value>, field: &str) {
+    let saved = object
+        .remove(field)
+        .is_some_and(|value| value.as_str().is_some_and(|text| !text.is_empty()));
+    object.insert(format!("has_{field}"), saved.into());
 }
 
-/// sensors.json as the browser sees it: Discord's client secret and OAuth
-/// tokens stay on disk, only who authorized and until when is shown.
+/// sensors.json as the browser sees it: no passwords, keys or tokens, only
+/// whether one is saved, and for Discord who authorized and until when.
 pub(crate) fn public_config(config: &nexus_sensors::SensorConfig) -> Value {
     let mut value = serde_json::to_value(config).unwrap_or(Value::Null);
+    for (section, field) in [
+        ("home_assistant_server", "token"),
+        ("obs_server", "password"),
+    ] {
+        if let Some(server) = value.get_mut(section).and_then(Value::as_object_mut) {
+            hide_secret(server, field);
+        }
+    }
+    for (section, field, _) in LIST_SECRETS {
+        let items = value.get_mut(section).and_then(Value::as_array_mut);
+        for item in items.into_iter().flatten().filter_map(Value::as_object_mut) {
+            hide_secret(item, field);
+        }
+    }
     if let Some(discord) = value.get_mut("discord").and_then(Value::as_object_mut) {
         discord.remove("client_secret");
         if let Some(token) = discord.get_mut("token").and_then(Value::as_object_mut) {
@@ -162,21 +194,53 @@ fn preserve_fields(incoming: &mut Value, stored: &Value) {
     let (Some(incoming), Some(stored)) = (incoming.as_object_mut(), stored.as_object()) else {
         return;
     };
-    // Discord is only changed through /api/discord: what the browser has is
-    // the redacted copy, which must not replace the stored tokens.
-    match stored.get("discord") {
-        Some(discord) => {
-            incoming.insert("discord".to_string(), discord.clone());
-        }
-        None => {
-            incoming.remove("discord");
-        }
-    }
     for key in PRESERVED_FIELDS {
-        if let (false, Some(value)) = (incoming.contains_key(key), stored.get(key)) {
-            incoming.insert(key.to_string(), value.clone());
+        match stored.get(key) {
+            Some(value) => {
+                incoming.insert(key.to_string(), value.clone());
+            }
+            None => {
+                incoming.remove(key);
+            }
         }
     }
+    for (section, field, target) in LIST_SECRETS {
+        let empty = Vec::new();
+        let saved = stored
+            .get(section)
+            .and_then(Value::as_array)
+            .unwrap_or(&empty);
+        let items = incoming.get_mut(section).and_then(Value::as_array_mut);
+        for item in items.into_iter().flatten().filter_map(Value::as_object_mut) {
+            restore_secret(item, saved, field, target);
+        }
+    }
+}
+
+/// A row without its secret keeps the stored one, unless it now points
+/// somewhere else: a stored password must not follow a changed host.
+/// `previous_id` names the row when the page renamed it.
+fn restore_secret(
+    item: &mut serde_json::Map<String, Value>,
+    saved: &[Value],
+    field: &str,
+    target: &[&str],
+) {
+    item.remove(&format!("has_{field}"));
+    let previous = item.remove("previous_id");
+    if item.contains_key(field) {
+        return;
+    }
+    // A page that still carries an old `previous_id` falls back to the id.
+    let id = item.get("id");
+    let secret = saved
+        .iter()
+        .find(|row| previous.is_some() && row.get("id") == previous.as_ref())
+        .or_else(|| saved.iter().find(|row| row.get("id") == id))
+        .filter(|row| target.iter().all(|key| row.get(*key) == item.get(*key)))
+        .and_then(|row| row.get(field))
+        .cloned();
+    item.insert(field.to_string(), secret.unwrap_or_else(|| "".into()));
 }
 
 fn saved(config: nexus_sensors::SensorConfig, message: &str) -> Response {
@@ -312,11 +376,16 @@ fn redacted_ifttt_request(request: &nexus_sensors::IftttRequest) -> nexus_sensor
 #[derive(Deserialize)]
 struct ServerRequest {
     url: String,
+    #[serde(default)]
     token: String,
 }
 
 /// Normalized server: http(s) URL without trailing slash, non-empty token.
-fn checked_server(request: ServerRequest) -> Result<HomeAssistantServer, Response> {
+/// An empty token means the saved one, for the address it was saved for.
+fn checked_server(
+    request: ServerRequest,
+    stored: Option<&HomeAssistantServer>,
+) -> Result<HomeAssistantServer, Response> {
     let url = request.url.trim().trim_end_matches('/').to_string();
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err(Response::error(
@@ -324,15 +393,20 @@ fn checked_server(request: ServerRequest) -> Result<HomeAssistantServer, Respons
             "url must start with http:// or https://",
         ));
     }
-    let token = request.token.trim().to_string();
+    let mut token = request.token.trim().to_string();
     if token.is_empty() {
-        return Err(Response::error(400, "token must not be empty"));
+        match stored.filter(|server| server.url == url) {
+            Some(server) => token.clone_from(&server.token),
+            None => return Err(Response::error(400, "enter the access token")),
+        }
     }
     Ok(HomeAssistantServer { url, token })
 }
 
 fn test_home_assistant(body: &[u8]) -> Response {
-    let server = match parse_json(body, "Home Assistant").and_then(checked_server) {
+    let stored = providers::home_assistant_server();
+    let parsed = parse_json(body, "Home Assistant");
+    let server = match parsed.and_then(|request| checked_server(request, stored.as_ref())) {
         Ok(server) => server,
         Err(response) => return response,
     };
@@ -384,7 +458,11 @@ fn save_home_assistant_server(body: &[u8]) -> Response {
         Ok(request) => request,
         Err(response) => return response,
     };
-    let server = match request.map(checked_server).transpose() {
+    let stored = providers::home_assistant_server();
+    let server = match request
+        .map(|request| checked_server(request, stored.as_ref()))
+        .transpose()
+    {
         Ok(server) => server,
         Err(response) => return response,
     };
@@ -448,11 +526,109 @@ mod tests {
         let mut without = json!({ "rss": [{ "id": "a" }] });
         preserve_fields(&mut without, &stored);
         assert_eq!(without["home_assistant_server"]["url"], "http://ha");
-        let mut cleared = json!({ "home_assistant_server": null });
-        preserve_fields(&mut cleared, &stored);
-        assert!(
-            cleared["home_assistant_server"].is_null(),
-            "explicit values win"
+        // The page holds only a redacted copy; that must not replace it.
+        let mut redacted =
+            json!({ "home_assistant_server": { "url": "http://evil", "has_token": true } });
+        preserve_fields(&mut redacted, &stored);
+        assert_eq!(
+            redacted["home_assistant_server"],
+            stored["home_assistant_server"]
+        );
+    }
+
+    fn with_secrets() -> nexus_sensors::SensorConfig {
+        serde_json::from_value(json!({
+            "home_assistant_server": { "url": "http://ha", "token": "ha-token" },
+            "obs_server": { "host": "localhost", "port": 4455, "password": "obs-password" },
+            "home_assistant": [{ "id": "desk", "base_url": "http://ha", "entity_id": "light.desk", "token": "entity-token" }],
+            "ifttt": [{ "id": "phone", "event": "e", "key": "ifttt-key" }],
+            "mqtt": [{ "id": "broker", "host": "a", "port": 1883, "topic": "t", "password": "mqtt-password" }],
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn no_secret_reaches_the_page() {
+        let public = public_config(&with_secrets());
+        let text = public.to_string();
+        for secret in [
+            "ha-token",
+            "entity-token",
+            "obs-password",
+            "ifttt-key",
+            "mqtt-password",
+        ] {
+            assert!(!text.contains(secret), "{secret} leaked: {text}");
+        }
+        assert_eq!(public["home_assistant_server"]["has_token"], true);
+        assert_eq!(public["obs_server"]["has_password"], true);
+        assert_eq!(public["ifttt"][0]["has_key"], true);
+        assert_eq!(public["mqtt"][0]["has_password"], true);
+    }
+
+    #[test]
+    fn saving_the_redacted_copy_keeps_every_secret() {
+        let config = with_secrets();
+        let stored = serde_json::to_value(&config).unwrap();
+        let mut incoming = public_config(&config);
+        preserve_fields(&mut incoming, &stored);
+        let back: nexus_sensors::SensorConfig = serde_json::from_value(incoming).unwrap();
+        assert_eq!(back.home_assistant[0].token, "entity-token");
+        assert_eq!(back.ifttt[0].key, "ifttt-key");
+        assert_eq!(back.mqtt[0].password, "mqtt-password");
+        assert_eq!(back.home_assistant_server.unwrap().token, "ha-token");
+        assert_eq!(back.obs_server.unwrap().password, "obs-password");
+    }
+
+    #[test]
+    fn a_stored_password_follows_a_rename_but_not_a_new_host() {
+        let config = with_secrets();
+        let stored = serde_json::to_value(&config).unwrap();
+        let mut incoming = public_config(&config);
+        incoming["mqtt"][0]["id"] = "renamed".into();
+        incoming["mqtt"][0]["previous_id"] = "broker".into();
+        preserve_fields(&mut incoming, &stored);
+        assert_eq!(incoming["mqtt"][0]["password"], "mqtt-password");
+        assert!(incoming["mqtt"][0].get("previous_id").is_none());
+        // A second save of the renamed row, with its old name still attached.
+        let after_rename =
+            json!({ "mqtt": [{ "id": "renamed", "host": "a", "port": 1883, "password": "kept" }] });
+        let mut again = json!({ "mqtt": [{ "id": "renamed", "host": "a", "port": 1883, "previous_id": "broker" }] });
+        preserve_fields(&mut again, &after_rename);
+        assert_eq!(again["mqtt"][0]["password"], "kept");
+        let mut moved = public_config(&config);
+        moved["mqtt"][0]["host"] = "evil.example".into();
+        preserve_fields(&mut moved, &stored);
+        assert_eq!(moved["mqtt"][0]["password"], "");
+        // A typed value replaces the stored one.
+        let mut typed = public_config(&config);
+        typed["mqtt"][0]["password"] = "new".into();
+        preserve_fields(&mut typed, &stored);
+        assert_eq!(typed["mqtt"][0]["password"], "new");
+    }
+
+    #[test]
+    fn an_empty_token_means_the_saved_one_for_its_address_only() {
+        let stored = HomeAssistantServer {
+            url: "http://ha".into(),
+            token: "saved".into(),
+        };
+        let request = |url: &str| ServerRequest {
+            url: url.into(),
+            token: String::new(),
+        };
+        let same = checked_server(request("http://ha/"), Some(&stored))
+            .ok()
+            .unwrap();
+        assert_eq!(same.token, "saved");
+        let other = checked_server(request("http://evil.example"), Some(&stored));
+        assert_eq!(other.err().unwrap().status, 400);
+        assert_eq!(
+            checked_server(request("http://ha"), None)
+                .err()
+                .unwrap()
+                .status,
+            400
         );
     }
 

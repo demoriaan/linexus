@@ -237,8 +237,8 @@ pub struct DiscordInfo {
     pub link: Option<DiscordLink>,
     /// The member whose volume the call widget shows; set by the daemon.
     pub focus: Option<String>,
-    /// Draw the muted badge in the corner of the page; set by the daemon.
-    pub mute_badge: bool,
+    /// Draw the microphone badge in the corner of the page; set by the daemon.
+    pub mic_badge: bool,
     /// Counts up every few seconds; voice widgets with more channels than
     /// room show their next page. Set by the daemon.
     pub rotation: u64,

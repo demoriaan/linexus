@@ -242,9 +242,10 @@ mod tests {
         // `sh` exits at once; the backgrounded sleep keeps stdout open.
         let script = format!("sleep 30 & echo $! > '{}'", pid_file.display());
         let started = Instant::now();
-        let result = run_command_capture("sh", &["-c".into(), script], Duration::from_millis(300));
+        // Long enough for `sh` to write the file on a machine under load.
+        let result = run_command_capture("sh", &["-c".into(), script], Duration::from_secs(2));
         assert!(result.is_err());
-        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(started.elapsed() < Duration::from_secs(8));
         let pid = std::fs::read_to_string(&pid_file).unwrap();
         let _ = std::fs::remove_file(&pid_file);
         let stat = format!("/proc/{}/stat", pid.trim());

@@ -75,7 +75,7 @@ All fields are optional.
 | `weather` | location or `null` | `null` | Default place for weather widgets: `{"name": "Berlin", "latitude": 52.52, "longitude": 13.405}` |
 | `notifications` | object | see below | Desktop notifications on the strip |
 | `overlays` | object | see below | Short pop-ups for volume and track changes |
-| `discord` | object | see below | Discord's notifications and the muted badge |
+| `discord` | object | see below | Discord's notifications and the microphone badge |
 | `touch` | object | see below | Correction for a touch panel that reads touches beside the finger |
 
 `idle`:
@@ -123,7 +123,7 @@ Notification text is cut to 1024 characters. A picture sent inline with more tha
 
 Both stay within ±100. The daemon corrects the strip's own touches only; taps from Studio's mirror and the emulator are exact.
 
-Studio → Device → Calibrate measures it: the strip shows five marks across its width, twice, one after the other, and you touch the center of each. A touch more than 70 px from its mark does not count and the mark stays. A line fitted through the ten touches gives both values, which Studio shows to apply or discard; values under 10 px at both edges are within normal finger accuracy and count as no correction. A calibration fails when one touch lies more than 30 px off the fitted line, when the touches stretch the strip by more than 25 %, or when the marks are missed for 30 seconds; with no touch for 30 seconds it is cancelled. By hand, `linexusctl touch` prints what the panel reports while `linexusctl demo --pattern border-grid` shows lines every 100 px (stop the daemon first).
+Studio → Device → Calibrate measures it: the strip shows five marks across its width, twice, one after the other, and you touch the center of each. A touch more than 70 px from its mark does not count and the mark stays. A panel reading further off than that cannot be calibrated; set the values by hand (up to ±100). A line fitted through the ten touches gives both values, which Studio applies right away and offers to undo; values under 10 px at both edges are within normal finger accuracy and count as no correction. One touch more than 20 px off the fitted line is left out; a calibration fails when more of them do, when the touches stretch the strip by more than 25 %, or when the marks are missed for 30 seconds; with no touch for 30 seconds it is cancelled. By hand, `linexusctl touch` prints what the panel reports while `linexusctl demo --pattern border-grid` shows lines every 100 px (stop the daemon first).
 
 `discord` (needs Discord connected in Studio, see [`discord`](#discord)):
 
@@ -131,7 +131,7 @@ Studio → Device → Calibrate measures it: the strip shows five marks across i
 |---|---|---|---|
 | `notifications` | boolean | `true` | Show the message notifications Discord shows, with the author's picture; a tap opens the conversation in Discord. Discord's own notification settings decide which messages notify. Needs `notifications.enabled`. `notifications.duration_ms`, `notifications.private` (which also hides the author's picture) and `notifications.muted_apps` apply, and so does do not disturb on the desktop. While they arrive this way, a desktop notification repeating one of these messages is left out. |
 | `scroll` | `"direct"`, `"all"`, `"never"` | `"direct"` | Which notifications too long for their line scroll to the end: they wait 2 seconds, scroll, stay 3 more seconds and go (at most 30 seconds in all). `direct`: direct and group messages only, server messages show their beginning. |
-| `mute_indicator` | boolean | `true` | While you sit muted or deafened in a voice channel, a red badge in the top right corner of every page says so; left out on pages that already show it (a mute, deafen or push-to-talk button, a `discord_call` widget or a Discord volume slider) |
+| `mute_indicator` | boolean | `true` | While you sit in a voice channel, a badge in the top right corner of every page shows your microphone: red while you are muted or deafened, white while it is on. Off outside a voice channel, and left out on pages that already show it (a mute, deafen or push-to-talk button, a `discord_call` widget or a Discord volume slider) |
 
 ## Profiles
 
@@ -320,14 +320,14 @@ Built-in tap: joins the voice channel you tap; on the channel you are already in
 
 ### discord_call
 
-The voice channel you are in: its name and the voice connection's ping on the left (green signal under 100 ms, amber under 250 ms, red above), then everyone in it with their picture and name, a green ring around whoever speaks, and badges for muted, deafened and muted-for-you members. Says so when you are in no voice channel.
+The voice channel you are in: its name and the voice connection's ping on the left (green signal under 100 ms, amber under 250 ms, red above), then everyone in it with their picture and name, a green ring around whoever speaks, and badges for muted, deafened and muted-for-you members. Says so when you are in no voice channel. On the left, a button for your microphone stays visible whatever the row shows, also outside a call: a solid red tile while you are muted or deafened, a green microphone otherwise.
 
 | Field | Default | Meaning |
 |---|---|---|
 | `show_names` | `true` | Names under the pictures |
 | `show_ping` | `true` | Ping and connection quality under the channel name |
 
-Built-in tap: tap someone to open their controls: mute them for you, quieter or louder in steps of 10 % (0 to 200 %), close. The controls close on their own after 8 seconds without a touch. These settings are yours only, as in Discord's own menu. Tapping yourself opens your microphone's controls instead (mute, quieter, louder, 0 to 100 %), since Discord sets no volume of yours for you.
+Built-in tap: the button on the left mutes or unmutes your microphone; while you are deafened it undeafens you. Tap someone to open their controls: mute them for you, quieter or louder in steps of 10 % (0 to 200 %), close. The controls close on their own after 8 seconds without a touch. These settings are yours only, as in Discord's own menu. Tapping yourself opens your microphone's controls instead (mute, quieter, louder, 0 to 100 %), since Discord sets no volume of yours for you.
 
 ### timer
 
@@ -519,7 +519,7 @@ Controls OBS Studio through its WebSocket server (OBS 28 or newer), using the co
 
 ### discord
 
-Controls the Discord desktop app through its local RPC socket. Only a socket whose other end runs as your own user gets your token. The daemon connects while the active profile has Discord buttons, a [`discord_voice`](#discord_voice) or [`discord_call`](#discord_call) widget or a Discord volume slider, while a profile has `discord_voice`, or while `settings.discord` shows notifications or the muted badge.
+Controls the Discord desktop app through its local RPC socket. Only a socket whose other end runs as your own user gets your token. The daemon connects while the active profile has Discord buttons, a [`discord_voice`](#discord_voice) or [`discord_call`](#discord_call) widget or a Discord volume slider, while a profile has `discord_voice`, or while `settings.discord` shows notifications or the microphone badge.
 
 | `command` | Does |
 |---|---|

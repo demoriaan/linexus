@@ -2,7 +2,8 @@
 //! ping on the left, then everyone in it with bigger pictures than the
 //! voice widget. A tap on someone swaps the row for their controls: mute
 //! them for you, make them quieter or louder, close. A tap on yourself
-//! opens your microphone's: mute, quieter, louder.
+//! opens your microphone's: mute, quieter, louder. Your microphone's mute
+//! button stays on the left whatever the row shows, red while you are muted.
 
 use super::{press_glow, Ctx};
 use crate::canvas::{Bounds, Canvas};
@@ -21,6 +22,8 @@ const BUTTON_GAP: f32 = 4.0;
 /// Narrow widgets get smaller buttons, so the picture and value still fit.
 const BUTTON_NARROW: f32 = 30.0;
 const NARROW: f32 = 260.0;
+/// The room the microphone button takes on the left.
+const MICROPHONE_SLOT: f32 = 4.0 + BUTTON + 6.0;
 const SPEAKING: Rgb = Rgb::hex(0x23a55a);
 const BADGE: Rgb = Rgb::hex(0xf23f43);
 const FAIR: Rgb = Rgb::hex(0xf0b232);
@@ -28,6 +31,8 @@ const FAIR: Rgb = Rgb::hex(0xf0b232);
 /// What a tap on the widget means.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CallHit {
+    /// Mutes or unmutes your microphone, from the button that always shows.
+    Microphone,
     /// Opens this member's controls.
     Member(String),
     /// Mutes or unmutes the member for you; for yourself, your microphone.
@@ -37,6 +42,20 @@ pub enum CallHit {
     Louder(String),
     /// Closes the member's controls.
     Close,
+}
+
+fn microphone_button(b: Bounds) -> Bounds {
+    Bounds::new(b.x + 4.0, (b.h - BUTTON) / 2.0, BUTTON, BUTTON)
+}
+
+/// The part of the widget right of the microphone button.
+fn body(b: Bounds) -> Bounds {
+    Bounds::new(
+        b.x + MICROPHONE_SLOT,
+        b.y,
+        (b.w - MICROPHONE_SLOT).max(0.0),
+        b.h,
+    )
 }
 
 fn header_width(b: Bounds) -> f32 {
@@ -105,6 +124,10 @@ pub fn discord_call_hit(
         f32::from(nexus_config::STRIP_HEIGHT),
     );
     let x = f32::from(x);
+    if x < b.x + MICROPHONE_SLOT {
+        return Some(CallHit::Microphone);
+    }
+    let b = body(b);
     if let Some(member) = focused(info) {
         let [_close, louder, quieter, mute] = buttons(b);
         let inside = |button: Bounds| {
@@ -138,27 +161,17 @@ pub fn discord_call_hit(
 pub fn draw(canvas: &mut Canvas, b: Bounds, widget: &Widget, props: &DiscordCallProps, ctx: &Ctx) {
     let palette = ctx.palette;
     let accent = ctx.accent(widget, Rgb::hex(0x5865f2));
-    let locale = ctx.live.locale;
-    let message = |canvas: &mut Canvas, icon: &str, word: Word| {
-        canvas.icon(icon, b.x + 12.0, 14.0, 20.0, palette.text_dim, 1.0);
-        let style = TextStyle::new(FontFace::SemiBold, 14.0, palette.text_dim);
-        canvas.text_fit(
-            b.x + 40.0,
-            29.0,
-            format::word(word, locale),
-            &style,
-            b.w - 46.0,
-        );
-    };
     let Some(info) = ctx.live.discord.as_ref() else {
-        message(canvas, "headphones", Word::DiscordOffline);
+        notice(canvas, ctx, b, "headphones", Word::DiscordOffline);
         return;
     };
+    press_glow(canvas, b, accent, ctx.pressed(widget));
+    draw_microphone(canvas, ctx, microphone_button(b), info);
+    let b = body(b);
     if info.channel.is_none() {
-        message(canvas, "phone-off", Word::NotInVoice);
+        notice(canvas, ctx, b, "phone-off", Word::NotInVoice);
         return;
     }
-    press_glow(canvas, b, accent, ctx.pressed(widget));
     // The controls take the whole row, header included.
     if let Some(member) = focused(info) {
         draw_controls(canvas, ctx, b, info, member);
@@ -199,6 +212,35 @@ pub fn draw(canvas: &mut Canvas, b: Bounds, widget: &Widget, props: &DiscordCall
         let y = if props.show_names { 24.0 } else { 29.0 };
         canvas.text_centered(x, y, &format!("+{extra}"), &style);
     }
+}
+
+/// An icon and a word instead of the call.
+fn notice(canvas: &mut Canvas, ctx: &Ctx, b: Bounds, icon: &str, word: Word) {
+    let palette = ctx.palette;
+    canvas.icon(icon, b.x + 12.0, 14.0, 20.0, palette.text_dim, 1.0);
+    let style = TextStyle::new(FontFace::SemiBold, 14.0, palette.text_dim);
+    canvas.text_fit(
+        b.x + 40.0,
+        29.0,
+        format::word(word, ctx.live.locale),
+        &style,
+        b.w - 46.0,
+    );
+}
+
+/// Your microphone: a solid red tile while it is off, a green microphone
+/// while Discord can hear you. Deafened counts as off, Discord mutes you too.
+fn draw_microphone(canvas: &mut Canvas, ctx: &Ctx, bounds: Bounds, info: &DiscordInfo) {
+    let off = info.self_muted || info.self_deafened;
+    let (fill, icon, color) = if off {
+        (BADGE, "mic-off", Rgb::hex(0xffffff))
+    } else {
+        (ctx.palette.surface, "mic", SPEAKING)
+    };
+    canvas.round_rect(bounds, 8.0, fill, 1.0);
+    let size = (bounds.w * 0.59).round();
+    let inset = (bounds.w - size) / 2.0;
+    canvas.icon(icon, bounds.x + inset, bounds.y + inset, size, color, 1.0);
 }
 
 /// Signal bars and the ping, below the channel name.
@@ -387,20 +429,21 @@ mod tests {
     fn taps_pick_members_then_their_controls() {
         let props = DiscordCallProps::default();
         let mut info = info(3);
-        // Header is 30 % of 320 = 96 px; slots are 48 px from there.
-        assert_eq!(discord_call_hit(0, 320, &props, &info, 20), None);
+        // The button takes 44 px; the header 30 % of the other 276 = 82.8;
+        // slots are 48 px from 126.8 on.
+        assert_eq!(discord_call_hit(0, 320, &props, &info, 80), None);
         assert_eq!(
-            discord_call_hit(0, 320, &props, &info, 100),
+            discord_call_hit(0, 320, &props, &info, 130),
             Some(CallHit::Member("0".into()))
         );
         assert_eq!(
-            discord_call_hit(0, 320, &props, &info, 150),
+            discord_call_hit(0, 320, &props, &info, 180),
             Some(CallHit::Member("1".into()))
         );
         assert_eq!(discord_call_hit(0, 320, &props, &info, 300), None);
 
         info.focus = Some("1".into());
-        let [close, louder, quieter, mute] = buttons(Bounds::new(0.0, 0.0, 320.0, 48.0));
+        let [close, louder, quieter, mute] = buttons(body(Bounds::new(0.0, 0.0, 320.0, 48.0)));
         let at = |b: Bounds| b.center_x() as u16;
         assert_eq!(
             discord_call_hit(0, 320, &props, &info, at(mute)),
@@ -421,9 +464,24 @@ mod tests {
         // Someone who left takes their controls along.
         info.focus = Some("9".into());
         assert_eq!(
-            discord_call_hit(0, 320, &props, &info, 100),
+            discord_call_hit(0, 320, &props, &info, 130),
             Some(CallHit::Member("0".into()))
         );
+    }
+
+    #[test]
+    fn the_microphone_button_answers_whatever_the_row_shows() {
+        let props = DiscordCallProps::default();
+        let hit = |info: &DiscordInfo| discord_call_hit(100, 320, &props, info, 110);
+        let mut call = info(3);
+        assert_eq!(hit(&call), Some(CallHit::Microphone));
+        call.focus = Some("1".into());
+        assert_eq!(hit(&call), Some(CallHit::Microphone));
+        let not_in_a_call = DiscordInfo::default();
+        assert_eq!(hit(&not_in_a_call), Some(CallHit::Microphone));
+        // Right of the button is the row again.
+        call.focus = None;
+        assert_eq!(discord_call_hit(100, 320, &props, &call, 145), None);
     }
 
     #[test]
@@ -434,8 +492,8 @@ mod tests {
         let props = DiscordCallProps::default();
         let info = info(9);
         // Only the shown pictures answer taps; the counter does not. The
-        // header takes 30 % of 300 px.
-        let last = 90 + 3 * 48 + 10;
+        // button takes 44 px, the header 30 % of the other 256.
+        let last = 44 + 76 + 3 * 48 + 12;
         assert_eq!(discord_call_hit(0, 300, &props, &info, last), None);
     }
 

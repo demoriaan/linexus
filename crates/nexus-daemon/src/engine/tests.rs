@@ -470,6 +470,32 @@ fn discord_voice_switches_to_its_profile_and_back() {
     assert_eq!(engine.runtime.profile().id, "other");
 }
 
+#[test]
+fn the_microphone_badge_needs_a_voice_channel_and_a_page_without_its_own() {
+    let plain = page("plain", vec![]);
+    let mute = ActionSpec::Discord {
+        command: DiscordCommand::ToggleMute,
+        channel: None,
+        step: None,
+    };
+    let own = page("own", vec![button("mute", mute)]);
+    let mut discord = DiscordInfo::default();
+    assert!(!wants_mic_badge(&discord, &plain), "not in a voice channel");
+    discord.self_muted = true;
+    assert!(
+        !wants_mic_badge(&discord, &plain),
+        "muted, but not in voice"
+    );
+    discord.channel = Some("1".into());
+    assert!(wants_mic_badge(&discord, &plain), "muted in voice");
+    discord.self_muted = false;
+    assert!(wants_mic_badge(&discord, &plain), "microphone on in voice");
+    assert!(
+        !wants_mic_badge(&discord, &own),
+        "the page shows it already"
+    );
+}
+
 /// A push-to-talk button does nothing on its own tap; without Discord it
 /// does not leave the engine thinking the microphone is open.
 #[test]
@@ -632,4 +658,70 @@ fn discord_messages_follow_the_notification_settings() {
         }
         other => panic!("expected the private message, got {other:?}"),
     }
+}
+
+/// A swipe that happens to start on the slider must not set a level, and
+/// it turns the page like any other swipe.
+#[test]
+fn a_swipe_off_the_slider_sets_nothing_and_turns_the_page() {
+    let scratch = Scratch::new("slider-swipe");
+    let mut config = nexus_config::default_config();
+    let slider = Widget::new(
+        "volume",
+        480,
+        160,
+        WidgetKind::Volume(nexus_config::VolumeProps::default()),
+    );
+    config.profiles[0].pages = vec![page("a", vec![slider]), page("b", vec![])];
+    let mut engine = engine(Runtime::from_config(config, None), &scratch);
+    let t = Instant::now();
+    let before = engine.own_volume_until;
+    feed_reports(
+        &mut engine,
+        &[(1, 600), (1, 500), (1, 300), (0, 0)],
+        t + ms(2_000),
+    );
+    assert_eq!(engine.own_volume_until, before);
+    assert!(!engine.scene.sliding());
+    assert_eq!(engine.runtime.page().id, "b");
+}
+
+#[test]
+fn turning_the_strip_off_ends_a_calibration() {
+    use nexus_ipc::{CalibrateAction, CalibrationState};
+    let scratch = Scratch::new("calibration-blank");
+    let mut engine = engine(
+        Runtime::from_config(nexus_config::default_config(), None),
+        &scratch,
+    );
+    let t = Instant::now();
+    engine.handle_request(
+        Command::Calibrate {
+            action: CalibrateAction::Start,
+        },
+        t,
+    );
+    engine.handle_request(Command::Blank, t);
+    assert!(engine.calibration.is_none());
+    assert_eq!(engine.calibration_ended.state, CalibrationState::Cancelled);
+}
+
+#[test]
+fn a_calibration_needs_a_strip() {
+    use nexus_ipc::CalibrateAction;
+    let scratch = Scratch::new("calibration-unplugged");
+    let mut engine = engine(
+        Runtime::from_config(nexus_config::default_config(), None),
+        &scratch,
+    );
+    engine.mode = nexus_ipc::DaemonMode::Hardware;
+    engine.device.state = nexus_ipc::DeviceState::Unavailable;
+    let (response, _) = engine.handle_request(
+        Command::Calibrate {
+            action: CalibrateAction::Start,
+        },
+        Instant::now(),
+    );
+    assert!(!response.ok);
+    assert!(engine.calibration.is_none());
 }

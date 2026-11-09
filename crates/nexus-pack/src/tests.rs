@@ -461,6 +461,40 @@ fn review_lists_actions_that_reach_outside_the_strip() {
 }
 
 #[test]
+fn home_assistant_tiles_are_in_the_review() {
+    let mut config = config_with_outside_actions();
+    let tile = |id: &str| {
+        Widget::new(
+            id,
+            0,
+            100,
+            WidgetKind::Entity(nexus_config::EntityProps {
+                entity_id: "lock.front_door".into(),
+                ..Default::default()
+            }),
+        )
+    };
+    let mut own_action = tile("own");
+    own_action.tap = Some(ActionSpec::HomeAssistant {
+        service: "lock.unlock".into(),
+        entity_id: Some("lock.front_door".into()),
+    });
+    config.profiles[0].pages[0].widgets = vec![tile("door"), own_action];
+    let lines: Vec<(String, String)> = outside_reach(&config)
+        .into_iter()
+        .filter(|item| item.kind == ReachKind::HomeAssistant)
+        .map(|item| (item.widget, item.detail))
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            ("door".to_string(), "switch lock.front_door".to_string()),
+            ("own".to_string(), "lock.unlock lock.front_door".to_string()),
+        ]
+    );
+}
+
+#[test]
 fn review_text_cannot_hide_or_fake_lines() {
     let mut config = config_with_outside_actions();
     config.profiles[0].name = "Desk\u{1b}[1A\u{1b}[2K\u{202e}".into();

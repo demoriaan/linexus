@@ -126,6 +126,7 @@ Some touches do not reach widgets:
 
 - While the strip is dimmed with "First touch only wakes" switched on, or turned off by the idle timer or a "Turn the strip off" action, the first touch only wakes it.
 - While a notification, volume or track pop-up is shown, a touch closes it.
+- While the strip calibrates its touches, touches measure the panel instead.
 
 ### Actions
 
@@ -284,7 +285,7 @@ Both lists hold targets that receive the current headline card: an MQTT broker (
 ## Device
 
 - **Status**: connection state, device path, profile and page on the strip, a brightness slider, and **Turn off** or **Turn on**. **Start daemon**, **Restart** and **Stop** run `systemctl --user` for `linexusd.service`; **Start with my session** enables or disables it.
-- **Behaviour**: page change animation (Slide, Fade, Instant), language on the strip, 24 or 12 hour clock, °C or °F, dimming after an idle time and the dimmed brightness, "First touch only wakes", turning off after an idle time, and "Off while the screen is locked". These are the `settings` fields in [configuration.md](configuration.md#settings).
+- **Behaviour**: page change animation (Slide, Fade, Instant), language on the strip, 24 or 12 hour clock, °C or °F, dimming after an idle time and the dimmed brightness, "First touch only wakes", turning off after an idle time, and "Off while the screen is locked". These are the `settings` fields in [configuration.md](configuration.md#settings). Below them, **Touch correction** runs a calibration for a strip that reads touches beside the finger and shows the measured values to apply, or takes them by hand.
 - **Setup checks**: the strip, the udev rule, the daemon, autostart, the input helper, the desktop tools (`xdg-open`, `wpctl` or `pactl`, `busctl`, `curl`), the GNOME focus extension on GNOME, and OpenLinkHub. Each problem comes with a command you can copy.
 - **Recent events**: the daemon's event log.
 
@@ -302,10 +303,12 @@ The brightness slider here changes the strip immediately and is kept across daem
 Studio can change your configuration and start programs through actions, so it accepts requests only from its own page on this computer:
 
 - **Loopback only.** Studio binds to `127.0.0.1` by default and refuses to start on an address that is not a loopback address.
+- **Your account only.** Other accounts on the computer can reach a loopback port too, so Studio asks the kernel who owns each connection (`/proc/net/tcp`) and answers only the user who started it, and root. Everyone else gets status 403, on the page and on every API route. That includes webhooks: a script under another account cannot deliver cards.
+- **Secrets stay on disk.** The Home Assistant token and the passwords and keys of OBS, MQTT and IFTTT are not sent to the browser, which only learns that one is saved. Leave the field empty to keep it. A saved password or token is used only for the address it was saved for; change the address and it has to be entered again. IFTTT keys always go to IFTTT, so they stay.
 - **Host check.** Every request must name `127.0.0.1`, `localhost` or `[::1]` with Studio's port in its `Host` header; anything else gets status 421. A web page whose domain resolves to `127.0.0.1` still sends its own name and is refused.
 - **Write token.** Each start of Studio creates a random token and places it in the Studio page. Every `POST`, `PUT` and `DELETE` must carry the headers `X-Nexus-Studio: 1` and `X-Nexus-Studio-Token`; otherwise Studio answers 403. Other websites can neither read the token nor add these headers, because Studio never allows cross-origin requests.
 - **Content Security Policy.** Every response carries `default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self'` and `X-Content-Type-Options: nosniff`. The interface is built into the binary and loads nothing from other hosts.
 - **Limits.** One request per connection and at most 32 connections at a time (more get status 503); a request must arrive completely within 30 seconds; headers up to 64 KiB, bodies up to 16 MiB (webhook deliveries 64 KiB); a saved configuration up to 15 MiB.
 - **No lost updates.** A save names the revision of the configuration it started from; if the file changed since, Studio answers 409 and the page asks what to do.
 
-The webhook endpoint is the one exception to the token rule: `POST` and `PUT` to `/api/sensors/webhook/<id>` work without the token, so other local programs can deliver cards. They still pass the Host check, are refused when they come from a web page (an `Origin` header without the token, or `Sec-Fetch-Site: cross-site` or `same-site`), are accepted only for webhook names set up under **Connections**, and may carry at most 64 KiB. Names are matched the way they are stored, so `/webhook/Build` reaches the webhook `build`. A delivery only stores the card; deleting cards needs the token. Because Studio listens on loopback only, programs on other computers cannot reach it unless you forward the port yourself.
+The webhook endpoint is the one exception to the token rule: `POST` and `PUT` to `/api/sensors/webhook/<id>` work without the token, so your other programs can deliver cards. They still pass the Host check, are refused when they come from a web page (an `Origin` header without the token, or `Sec-Fetch-Site: cross-site` or `same-site`), are accepted only for webhook names set up under **Connections**, and may carry at most 64 KiB. Names are matched the way they are stored, so `/webhook/Build` reaches the webhook `build`. A delivery only stores the card; deleting cards needs the token. Because Studio listens on loopback only, programs on other computers cannot reach it unless you forward the port yourself.

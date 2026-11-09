@@ -36,6 +36,6 @@ export async function saveSection(section, value) {
   const fresh = await api.get("/api/sensors/config");
   const current = fresh.config[section] ?? [];
   const next = { ...fresh.config, [section]: typeof value === "function" ? value(current) : value };
-  await api.post("/api/sensors/config", next);
-  sensors.value = { ...fresh, config: next };
+  const saved = await api.post("/api/sensors/config", next);
+  sensors.value = { ...fresh, config: saved.config };
 }

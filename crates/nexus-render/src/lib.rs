@@ -95,30 +95,36 @@ pub fn render_page(page: &Page, theme: &Theme, live: &LiveData, ui: &UiState) ->
     for widget in &page.widgets {
         widgets::draw(&mut canvas, widget, &ctx);
     }
-    if let Some(discord) = live.discord.as_ref().filter(|d| d.mute_badge) {
-        draw_mute_badge(&mut canvas, discord);
+    if let Some(discord) = live.discord.as_ref().filter(|d| d.mic_badge) {
+        draw_mic_badge(&mut canvas, discord);
     }
     draw_page_indicator(&mut canvas, ui, &palette);
     canvas
 }
 
-/// A red pill in the top right corner while you sit muted or deafened in
-/// a voice channel, so you do not talk into the void.
-fn draw_mute_badge(canvas: &mut Canvas, discord: &DiscordInfo) {
+/// A pill in the top right corner while you sit in a voice channel. Red
+/// while you are muted or deafened, so you do not talk into the void; white
+/// with a microphone while yours is on.
+fn draw_mic_badge(canvas: &mut Canvas, discord: &DiscordInfo) {
+    const RED: u32 = 0xf23f43;
+    const WHITE: u32 = 0xffffff;
+    const INK: u32 = 0x1e1f22;
+    let (fill, icon, ink) = if discord.self_deafened {
+        (RED, "headphone-off", WHITE)
+    } else if discord.self_muted {
+        (RED, "mic-off", WHITE)
+    } else {
+        (WHITE, "mic", INK)
+    };
     let pill = Bounds::new(WIDTH as f32 - 33.0, 3.0, 30.0, 17.0);
     canvas.round_rect(pill.inset(-1.0, -1.0), 9.5, Rgb::hex(0x000000), 0.35);
-    canvas.round_rect(pill, 8.5, Rgb::hex(0xf23f43), 1.0);
-    let icon = if discord.self_deafened {
-        "headphone-off"
-    } else {
-        "mic-off"
-    };
+    canvas.round_rect(pill, 8.5, Rgb::hex(fill), 1.0);
     canvas.icon(
         icon,
         pill.center_x() - 6.0,
         pill.y + 2.5,
         12.0,
-        Rgb::hex(0xffffff),
+        Rgb::hex(ink),
         1.0,
     );
 }

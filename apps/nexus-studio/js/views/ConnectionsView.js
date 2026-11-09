@@ -37,12 +37,12 @@ export function ConnectionsView() {
 function HomeAssistant() {
   const saved = sensors.value?.config?.home_assistant_server ?? null;
   const [url, setUrl] = useState(saved?.url ?? "");
-  const [token, setToken] = useState(saved?.token ?? "");
+  const [token, setToken] = useState("");
   const [status, setStatus] = useState(null);
   useEffect(() => {
     setUrl(saved?.url ?? "");
-    setToken(saved?.token ?? "");
-  }, [saved?.url, saved?.token]);
+    setToken("");
+  }, [saved?.url, saved?.has_token]);
   const test = async () => {
     setStatus({ busy: true });
     try {
@@ -67,9 +67,9 @@ function HomeAssistant() {
       <p class="hint" style=${{ marginBottom: "12px" }}>${t("ha.lead")}</p>
       <div class="stack">
         <${Field} label=${t("ha.url")}><${TextInput} type="url" value=${url} placeholder="http://homeassistant.local:8123" onInput=${setUrl} /><//>
-        <${Field} label=${t("ha.token")} hint=${t("ha.token.hint")}><${TextInput} type="password" value=${token} onInput=${setToken} /><//>
+        <${Field} label=${t("ha.token")} hint=${t("ha.token.hint")}><${TextInput} type="password" value=${token} placeholder=${saved?.has_token ? t("discord.secret.saved") : ""} onInput=${setToken} /><//>
         <div class="row">
-          <button class="btn" onClick=${test} disabled=${!url || !token}>${t("ha.test")}</button>
+          <button class="btn" onClick=${test} disabled=${!url || (!token && !saved?.has_token)}>${t("ha.test")}</button>
           <button class="btn primary" onClick=${save}>${t("common.save")}</button>
           ${status?.ok && html`<span class="ok-text">${status.ok}</span>`}
           ${status?.error && html`<span class="bad-text">${status.error}</span>`}
@@ -82,14 +82,15 @@ function Obs() {
   const saved = sensors.value?.config?.obs_server ?? null;
   const [host, setHost] = useState(saved?.host ?? "localhost");
   const [port, setPort] = useState(saved?.port ?? 4455);
-  const [password, setPassword] = useState(saved?.password ?? "");
+  const [password, setPassword] = useState("");
   const [status, setStatus] = useState(null);
   useEffect(() => {
     setHost(saved?.host ?? "localhost");
     setPort(saved?.port ?? 4455);
-    setPassword(saved?.password ?? "");
-  }, [saved?.host, saved?.port, saved?.password]);
-  const server = () => ({ host, port: Number(port) || 0, password });
+    setPassword("");
+  }, [saved?.host, saved?.port, saved?.has_password]);
+  // Left out, the server keeps the saved password.
+  const server = () => ({ host, port: Number(port) || 0, ...(password ? { password } : {}) });
   const test = async () => {
     setStatus({ busy: true });
     try {
@@ -118,7 +119,7 @@ function Obs() {
           <${Field} label=${t("obs.host")}><${TextInput} value=${host} placeholder="localhost" onInput=${setHost} /><//>
           <${Field} label=${t("obs.port")}><${TextInput} type="number" value=${String(port)} onInput=${setPort} /><//>
         </div>
-        <${Field} label=${t("obs.password")} hint=${t("obs.password.hint")}><${TextInput} type="password" value=${password} onInput=${setPassword} /><//>
+        <${Field} label=${t("obs.password")} hint=${t("obs.password.hint")}><${TextInput} type="password" value=${password} placeholder=${saved?.has_password ? t("discord.secret.saved") : ""} onInput=${setPassword} /><//>
         <div class="row">
           <button class="btn" onClick=${test} disabled=${!host || status?.busy}>${t("obs.test")}</button>
           <button class="btn primary" onClick=${() => save(false)} disabled=${!host}>${t("common.save")}</button>
@@ -140,7 +141,7 @@ function Discord() {
   const [result, setResult] = useState(null);
   const refresh = async () => {
     try {
-      const data = await api.get("/api/discord/status");
+      const data = await api.post("/api/discord/status", {});
       setStatus(data);
       setClientId(data.client_id ?? "");
     } catch (error) {
@@ -202,7 +203,7 @@ function Discord() {
         <div class="row">
           <button class="btn" onClick=${() => save(false)} disabled=${!clientId.trim() || !changed || (!secret && !status?.has_secret)}>${t("common.save")}</button>
           <button class="btn primary" onClick=${connect} disabled=${!status?.configured || changed || busy}>${busy ? t("discord.connecting") : t("discord.connect")}</button>
-          ${status?.configured && html`<button class="btn ghost" onClick=${() => save(true)}>${t("discord.remove")}</button>`}
+          ${status?.configured && html`<${ConfirmButton} class="btn ghost" title=${t("discord.remove")} onConfirm=${() => save(true)}>${t("discord.remove")}<//>`}
         </div>
         ${result?.ok && html`<span class="ok-text">${result.ok}</span>`}
         ${result?.error && html`<span class="bad-text">${result.error}</span>`}
@@ -359,16 +360,24 @@ const OUTGOING = {
 function OutgoingList({ kind }) {
   const spec = OUTGOING[kind];
   const stored = sensors.value?.config?.[kind] ?? [];
+  const secret = spec.fields.find(([, type]) => type === "password")[0];
   const [items, setItems] = useState(stored);
   const [dirty, setDirty] = useState(false);
   useEffect(() => { if (!dirty) setItems(stored); }, [JSON.stringify(stored)]);
   const set = (i, key, value) => {
-    setItems(items.map((it, j) => (j === i ? { ...it, [key]: value } : it)));
+    setItems(items.map((it, j) => {
+      if (j !== i) return it;
+      // The server finds a renamed row's saved secret under its old name.
+      const renamed = key === "id" && it.previous_id === undefined && it[`has_${secret}`] ? { previous_id: it.id } : {};
+      return { ...it, ...renamed, [key]: value };
+    }));
     setDirty(true);
   };
   const save = async () => {
     try {
       await saveSection(kind, items);
+      // The saved rows, without typed secrets or a rename's old name.
+      setItems(sensors.value?.config?.[kind] ?? []);
       setDirty(false);
       toast(t("common.saved"), "ok");
     } catch (error) {
@@ -397,7 +406,9 @@ function OutgoingList({ kind }) {
             ${spec.fields.map(([key, type]) => type === "toggle"
               ? html`<div class="field inline"><span>${t(`${kind}.${key}`)}</span><${Switch} checked=${item[key]} onChange=${(v) => set(i, key, v)} /></div>`
               : html`<${Field} label=${t(`${kind}.${key}`)}>
-                  <input type=${type} value=${item[key] ?? ""} onInput=${(e) => set(i, key, type === "number" ? Number(e.currentTarget.value) : e.currentTarget.value)} />
+                  <input type=${type} value=${item[key] ?? ""}
+                    placeholder=${type === "password" && item[`has_${key}`] ? t("discord.secret.saved") : ""}
+                    onInput=${(e) => set(i, key, type === "number" ? Number(e.currentTarget.value) : (type === "password" ? e.currentTarget.value || undefined : e.currentTarget.value))} />
                 <//>`)}
           </div>
           <div class="row">

@@ -22,9 +22,11 @@ const MAX_CORRECTION: f32 = nexus_config::MAX_TOUCH_CORRECTION as f32;
 /// Marks stand 140 px apart: a touch further than half of that from its mark
 /// was not aimed at it, so it does not count and the mark stays.
 const STRAY_PX: i32 = 70;
-/// A touch this far from the fitted line says the touches do not describe a
-/// panel offset, whatever the line through them looks like.
-const MAX_RESIDUAL: f32 = 30.0;
+/// A touch this far from the fitted line is left out once and the line
+/// fitted again: one stray touch would otherwise shift the result by more
+/// than `NOISE_PX`. Still this far off after that, the touches do not
+/// describe a panel offset.
+const MAX_RESIDUAL: f32 = 20.0;
 /// A finger lands within about a dozen pixels of where it aims: less than
 /// this at both edges is the finger, not the panel.
 const NOISE_PX: f32 = 10.0;
@@ -114,42 +116,73 @@ impl Calibration {
     }
 }
 
-/// Least squares line `mark = a * raw + b`, as the correction it means at
-/// raw X 0 and 639.
+/// The line `mark = a * raw + b` through the touches, by least squares.
+#[derive(Clone, Copy)]
+struct Line {
+    a: f32,
+    b: f32,
+}
+
+impl Line {
+    fn through(samples: &[(u16, u16)]) -> Option<Self> {
+        let n = samples.len() as f32;
+        if n < 2.0 {
+            return None;
+        }
+        let mean = |pick: fn(&(u16, u16)) -> u16| {
+            samples.iter().map(|s| f32::from(pick(s))).sum::<f32>() / n
+        };
+        let (mark_mean, raw_mean) = (mean(|s| s.0), mean(|s| s.1));
+        let spread: f32 = samples
+            .iter()
+            .map(|&(_, raw)| (f32::from(raw) - raw_mean).powi(2))
+            .sum();
+        if spread < 1.0 {
+            return None;
+        }
+        let a = samples
+            .iter()
+            .map(|&(mark, raw)| (f32::from(raw) - raw_mean) * (f32::from(mark) - mark_mean))
+            .sum::<f32>()
+            / spread;
+        Some(Self {
+            a,
+            b: mark_mean - a * raw_mean,
+        })
+    }
+
+    fn residual(self, &(mark, raw): &(u16, u16)) -> f32 {
+        (self.a * f32::from(raw) + self.b - f32::from(mark)).abs()
+    }
+
+    /// The touch furthest from the line, and how far it is.
+    fn worst(self, samples: &[(u16, u16)]) -> Option<(usize, f32)> {
+        samples
+            .iter()
+            .map(|sample| self.residual(sample))
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.total_cmp(b))
+    }
+}
+
+/// The correction at raw X 0 and 639 that the touches ask for.
 fn fit(samples: &[(u16, u16)]) -> Option<(i16, i16)> {
-    let n = samples.len() as f32;
-    if n < 2.0 {
-        return None;
-    }
-    let mean =
-        |pick: fn(&(u16, u16)) -> u16| samples.iter().map(|s| f32::from(pick(s))).sum::<f32>() / n;
-    let (mark_mean, raw_mean) = (mean(|s| s.0), mean(|s| s.1));
-    let spread: f32 = samples
-        .iter()
-        .map(|&(_, raw)| (f32::from(raw) - raw_mean).powi(2))
-        .sum();
-    if spread < 1.0 {
-        return None;
-    }
-    let a = samples
-        .iter()
-        .map(|&(mark, raw)| (f32::from(raw) - raw_mean) * (f32::from(mark) - mark_mean))
-        .sum::<f32>()
-        / spread;
-    if (a - 1.0).abs() > MAX_STRETCH {
-        return None;
-    }
-    let b = mark_mean - a * raw_mean;
-    let residual = samples
-        .iter()
-        .map(|&(mark, raw)| (a * f32::from(raw) + b - f32::from(mark)).abs())
-        .fold(0.0, f32::max);
+    let mut line = Line::through(samples)?;
+    let (worst, residual) = line.worst(samples)?;
     if residual > MAX_RESIDUAL {
+        let mut rest = samples.to_vec();
+        rest.remove(worst);
+        line = Line::through(&rest)?;
+        if line.worst(&rest)?.1 > MAX_RESIDUAL {
+            return None;
+        }
+    }
+    if (line.a - 1.0).abs() > MAX_STRETCH {
         return None;
     }
     let last = f32::from(nexus_config::STRIP_WIDTH - 1);
-    let left = b;
-    let right = a * last + b - last;
+    let left = line.b;
+    let right = line.a * last + line.b - last;
     if left.abs() > MAX_CORRECTION || right.abs() > MAX_CORRECTION {
         return None;
     }
@@ -218,17 +251,27 @@ mod tests {
         assert!(!calibration.missed());
     }
 
-    #[test]
-    fn one_wild_touch_fails_the_calibration() {
+    fn tapped(offsets: [i32; 10]) -> Option<(i16, i16)> {
         let now = Instant::now();
         let mut calibration = Calibration::new(now);
-        // Close enough to count, far enough to bend any line.
-        for offset in [0, 0, 0, 65, 0, 0, 0, 0, 0, 0] {
+        for offset in offsets {
             let mark = calibration.mark().unwrap();
-            tap(&mut calibration, mark - offset, now);
+            tap(&mut calibration, (i32::from(mark) + offset) as u16, now);
         }
         assert_eq!(calibration.mark(), None);
-        assert_eq!(calibration.result(), None);
+        calibration.result()
+    }
+
+    #[test]
+    fn one_stray_touch_is_left_out() {
+        // On a perfect panel, as far off as still counts for its mark.
+        assert_eq!(tapped([0, 0, 0, -65, 0, 0, 0, 0, 0, 0]), Some((0, 0)));
+        assert_eq!(tapped([-40, 0, 0, 0, 0, 0, 0, 0, 0, 0]), Some((0, 0)));
+    }
+
+    #[test]
+    fn more_than_one_stray_touch_fails_the_calibration() {
+        assert_eq!(tapped([0, -60, 0, 60, 0, 0, 60, 0, -60, 0]), None);
     }
 
     #[test]

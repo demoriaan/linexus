@@ -15,11 +15,12 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub fn route(request: &Request) -> Option<Response> {
     let response = match (request.method.as_str(), request.path.as_str()) {
-        ("GET", "/api/discord/status") => status(),
+        // Not GETs: status opens a connection to Discord, and listing the
+        // servers can renew and store the token.
+        ("POST", "/api/discord/status") => status(),
         ("POST", "/api/discord/app") => save(&request.body),
         ("DELETE", "/api/discord/app") => save(b"null"),
         ("POST", "/api/discord/authorize") => authorize(),
-        // Not a GET: it can renew and store the token.
         ("POST", "/api/discord/guilds") => guilds(),
         _ => return None,
     };
@@ -147,8 +148,15 @@ fn authorize() -> Response {
         Err(error) => return unavailable(&error),
     };
     let user = token.user.clone();
-    if let Err(error) = nexus_sensors::store_discord_token(&app.client_id, token) {
-        return Response::error(500, format!("failed to save sensors.json: {error}"));
+    match nexus_sensors::store_discord_token(&app.client_id, token) {
+        Ok(true) => {}
+        Ok(false) => {
+            return Response::error(
+                409,
+                "the Discord application changed while connecting; connect again",
+            )
+        }
+        Err(error) => return Response::error(500, format!("failed to save sensors.json: {error}")),
     }
     Response::json(
         200,
@@ -162,7 +170,10 @@ fn guilds() -> Response {
         return Response::error(404, "Discord is not set up; connect it under Connections");
     };
     match nexus_sensors::discord_guilds(&app) {
-        Ok(guilds) => Response::json(200, &json!({ "ok": true, "guilds": guilds })),
+        Ok((guilds, unsaved)) => Response::json(
+            200,
+            &json!({ "ok": true, "guilds": guilds, "token_not_saved": unsaved }),
+        ),
         Err(error) => unavailable(&error),
     }
 }
