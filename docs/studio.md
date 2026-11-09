@@ -285,7 +285,7 @@ Both lists hold targets that receive the current headline card: an MQTT broker (
 ## Device
 
 - **Status**: connection state, device path, profile and page on the strip, a brightness slider, and **Turn off** or **Turn on**. **Start daemon**, **Restart** and **Stop** run `systemctl --user` for `linexusd.service`; **Start with my session** enables or disables it.
-- **Behaviour**: page change animation (Slide, Fade, Instant), language on the strip, 24 or 12 hour clock, °C or °F, dimming after an idle time and the dimmed brightness, "First touch only wakes", turning off after an idle time, and "Off while the screen is locked". These are the `settings` fields in [configuration.md](configuration.md#settings). Below them, **Touch correction** runs a calibration for a strip that reads touches beside the finger and shows the measured values to apply, or takes them by hand.
+- **Behaviour**: page change animation (Slide, Fade, Instant), language on the strip, 24 or 12 hour clock, °C or °F, dimming after an idle time and the dimmed brightness, "First touch only wakes", turning off after an idle time, and "Off while the screen is locked". These are the `settings` fields in [configuration.md](configuration.md#settings). Below them, **Touch correction** runs a calibration for a strip that reads touches beside the finger and applies what it measures, with an undo, or takes the values by hand.
 - **Setup checks**: the strip, the udev rule, the daemon, autostart, the input helper, the desktop tools (`xdg-open`, `wpctl` or `pactl`, `busctl`, `curl`), the GNOME focus extension on GNOME, and OpenLinkHub. Each problem comes with a command you can copy.
 - **Recent events**: the daemon's event log.
 

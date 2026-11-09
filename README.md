@@ -103,7 +103,7 @@ Text with live values such as `{cpu.temp}`, `{gpu.power}` or `{obs.scene}`, your
 
 ### Touch gestures
 
-Each widget has its own action for a tap, a double tap and a hold, and a held button can repeat like a held key. Swipe to change pages: the page follows your finger and slides or fades into the next one. Pages you hide from swiping work like folders that a button opens. If taps land beside your finger, Studio calibrates the strip: touch the marks it shows, click Apply, and it corrects the panel from then on.
+Each widget has its own action for a tap, a double tap and a hold, and a held button can repeat like a held key. Swipe to change pages: the page follows your finger and slides or fades into the next one. Pages you hide from swiping work like folders that a button opens. If taps land beside your finger, Studio calibrates the strip: touch the marks it shows, and it corrects the panel from then on.
 
 <img src="docs/images/studio-touch.webp" alt="The Touch panel of a button in Studio: tap launches the web browser, double tap opens a website, hold presses Ctrl+Shift+T" width="100%">
 
