@@ -79,6 +79,8 @@ Record, pause, stream, switch scenes, mute audio sources, save replay clips and 
 
 See who sits in your server's voice channels, with their profile pictures and a green ring around whoever speaks, and tap a channel to join it. A second widget shows the channel you are in with the connection's ping; tap someone to mute them for you or change their volume. Buttons mute your microphone, deafen you, talk while held, join a channel or leave voice, step your microphone or Discord's sound, and toggle noise suppression, echo cancellation, automatic gain or push to talk; a slider sets either level. Discord's message notifications show on the strip with the author's picture, and a tap opens the conversation. A red badge reminds you while you sit muted, and a profile can come up by itself while you are in voice. Linexus talks to the official Discord app on your computer; you connect it once in Studio with a Discord application of your own, which Discord requires for this kind of remote control. Vesktop and other clients built on arRPC cannot be controlled this way.
 
+The first version of the Discord integration came from [AxelB44](https://github.com/AxelB44), along with the touch fix and the calibration. Thank you!
+
 ![Two Discord pages on the strip: the call you are in, with its 42 ms ping, Nina speaking and Sam muted, mute and deafen buttons and Discord's sound level; below, the server's voice channels Gaming, Chill and AFK with their members, a leave button and the microphone level](docs/images/strip-discord.webp)
 
 ### Desktop notifications
@@ -132,7 +134,7 @@ Midnight, Aurora, Ember, Neon, Mono and Daylight, each with an accent colour of 
 
 ### English, German and French
 
-The strip and Studio speak English, German and French: dates, weather, timers and every widget's words on the strip, and the whole of Studio. Studio follows your browser's language until you pick one under Settings.
+The strip and Studio speak English, German and French: dates, weather, timers and every widget's words on the strip, and the whole of Studio. Studio follows your browser's language until you pick one under Settings. The French translation is by [AxelB44](https://github.com/AxelB44). Merci !
 
 ## Linexus Studio
 
