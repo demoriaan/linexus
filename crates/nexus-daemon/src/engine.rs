@@ -742,6 +742,13 @@ impl Engine {
                     ("brain", "Pause vorbei – weiter geht's")
                 }
                 (nexus_render::Locale::De, _) => ("alarm-clock", "Timer abgelaufen"),
+                (nexus_render::Locale::Fr, "focus_done") => {
+                    ("coffee", "Focus terminé – place à la pause")
+                }
+                (nexus_render::Locale::Fr, "break_done") => {
+                    ("brain", "Pause terminée – on s'y remet")
+                }
+                (nexus_render::Locale::Fr, _) => ("alarm-clock", "Minuteur terminé"),
                 (_, "focus_done") => ("coffee", "Focus done – time for a break"),
                 (_, "break_done") => ("brain", "Break is over – back to it"),
                 _ => ("alarm-clock", "Timer finished"),

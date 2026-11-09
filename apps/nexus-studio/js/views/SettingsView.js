@@ -118,7 +118,7 @@ export function SettingsView() {
             <header><${Icon} name="palette" /><h3>${t("settings.studio")}</h3></header>
             <div class="stack">
               <div class="field"><span>${t("settings.language")}</span>
-                <${Segmented} value=${lang.value} onChange=${setLang} options=${[{ value: "en", label: "English" }, { value: "de", label: "Deutsch" }]} />
+                <${Segmented} value=${lang.value} onChange=${setLang} options=${[{ value: "en", label: "English" }, { value: "de", label: "Deutsch" }, { value: "fr", label: "Français" }]} />
               </div>
               <div class="field"><span>${t("settings.appearance")}</span>
                 <${Segmented} value=${themeChoice.value} onChange=${setTheme}

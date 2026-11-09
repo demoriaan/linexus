@@ -60,7 +60,9 @@ function commands() {
   list.push({ id: "redo", icon: "redo-2", label: t("common.redo"), hint: "Ctrl Shift Z", run: redo });
   list.push({ id: "theme-dark", icon: "moon", label: t("palette.theme.dark"), hint: t("palette.studio"), run: () => setTheme("dark") });
   list.push({ id: "theme-light", icon: "sun", label: t("palette.theme.light"), hint: t("palette.studio"), run: () => setTheme("light") });
-  list.push({ id: "lang", icon: "languages", label: lang.value === "de" ? "Switch to English" : "Auf Deutsch umschalten", hint: t("palette.studio"), run: () => setLang(lang.value === "de" ? "en" : "de") });
+  for (const [code, label] of [["en", "Switch to English"], ["de", "Auf Deutsch umschalten"], ["fr", "Passer en français"]]) {
+    if (code !== lang.value) list.push({ id: `lang-${code}`, icon: "languages", label, hint: t("palette.studio"), run: () => setLang(code) });
+  }
   list.push({ id: "export", icon: "download", label: t("settings.export"), hint: t("palette.backup"), run: () => api.download("/api/pack/export") });
   if (templates.value.length) {
     list.push({ id: "add-page", icon: "list-plus", label: t("pages.add.title"), hint: t("palette.page"), run: () => { location.hash = "pages"; document.querySelector(".thumb.add")?.click(); } });

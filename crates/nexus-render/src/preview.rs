@@ -176,6 +176,11 @@ pub fn sample_notification(locale: Locale) -> Overlay {
             "Teamcall in 10 Minuten",
             "Wochenplanung mit dem Designteam",
         ),
+        Locale::Fr => (
+            "Agenda",
+            "Réunion d'équipe dans 10 minutes",
+            "Planning hebdo avec l'équipe design",
+        ),
         Locale::En => (
             "Calendar",
             "Team call in 10 minutes",

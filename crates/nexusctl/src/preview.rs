@@ -132,6 +132,7 @@ impl Pattern {
 pub(crate) enum LocaleArg {
     En,
     De,
+    Fr,
 }
 
 impl From<LocaleArg> for Locale {
@@ -139,6 +140,7 @@ impl From<LocaleArg> for Locale {
         match arg {
             LocaleArg::En => Locale::En,
             LocaleArg::De => Locale::De,
+            LocaleArg::Fr => Locale::Fr,
         }
     }
 }

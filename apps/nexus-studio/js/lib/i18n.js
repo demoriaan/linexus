@@ -1,4 +1,4 @@
-// Interface language. English and German ship with Studio; the choice is
+// Interface language. English, German and French ship with Studio; the choice is
 // kept in the browser and defaults to the browser language.
 import { signal, computed } from "./html.js";
 import { STRINGS } from "./strings.js";
@@ -11,7 +11,8 @@ const stored = (() => {
   }
 })();
 
-export const lang = signal(stored || (navigator.language?.toLowerCase().startsWith("de") ? "de" : "en"));
+const browser = navigator.language?.toLowerCase().slice(0, 2);
+export const lang = signal(stored || (["de", "fr"].includes(browser) ? browser : "en"));
 
 export function setLang(value) {
   lang.value = value;

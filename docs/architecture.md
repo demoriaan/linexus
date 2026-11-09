@@ -252,7 +252,7 @@ linexusctl render-preview --overlay notification --scale 2 --out notification.pn
 | `--pattern <NAME>` | Test pattern instead of a page: `rgb-bars` or `border-grid` |
 | `--overlay <NAME>` | Pop-up instead of a page: `notification`, `volume` or `track` |
 | `--theme <NAME>` | `midnight`, `aurora`, `ember`, `neon`, `mono` or `daylight` |
-| `--locale <LANG>` | `en` or `de` |
+| `--locale <LANG>` | `en`, `de` or `fr` |
 | `--scale <N>` | Enlarge by an integer factor (nearest neighbour) |
 | `--out <FILE>` | Output PNG (required) |
 

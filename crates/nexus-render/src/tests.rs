@@ -319,3 +319,38 @@ fn obs_buttons_show_what_obs_does() {
     };
     assert_eq!(widgets::text::expand("{obs.scene}", &ctx), "–");
 }
+
+#[test]
+fn calibration_screen_shows_the_mark_and_progress() {
+    let theme = Theme::default();
+    let first = calibration_frame(&theme, Locale::Fr, Some(40), 0, 10);
+    let right = calibration_frame(&theme, Locale::Fr, Some(600), 4, 10);
+    snapshot("calibration-first", &first);
+    snapshot("calibration-right", &right);
+    assert_ne!(first.rgba(), right.rgba());
+    let done = calibration_frame(&theme, Locale::Fr, None, 10, 10);
+    assert_eq!(done.rgba().len(), WIDTH * HEIGHT * 4);
+}
+
+#[test]
+fn french_is_chosen_and_written_like_french() {
+    assert_eq!(Locale::resolve("fr"), Locale::Fr);
+    assert_eq!(Locale::resolve("fr_FR.UTF-8"), Locale::Fr);
+    assert_eq!(Locale::resolve("de_DE.UTF-8"), Locale::De);
+    assert_eq!(Locale::resolve("es_ES.UTF-8"), Locale::En);
+
+    let time = |day, month, weekday| LocalTime {
+        year: 2026,
+        month,
+        day,
+        weekday,
+        hour: 12,
+        minute: 0,
+        second: 0,
+    };
+    assert_eq!(format::date(&time(1, 2, 0), Locale::Fr), "Lun 1er Fév");
+    assert_eq!(format::date(&time(21, 8, 4), Locale::Fr), "Ven 21 Août");
+    assert_eq!(format::word(format::Word::Timer, Locale::Fr), "Minuteur");
+    assert_eq!(format::word(format::Word::Done, Locale::Fr), "Fini");
+    assert_eq!(format::weather(45, true, Locale::Fr).1, "Brouillard");
+}

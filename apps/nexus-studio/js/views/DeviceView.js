@@ -87,7 +87,7 @@ function Behaviour() {
         </div>
         <div class="field"><span>${t("behaviour.locale")}</span>
           <${Segmented} value=${settings.locale} onChange=${(locale) => setSettings({ locale })}
-            options=${[["auto", t("common.auto")], ["en", "English"], ["de", "Deutsch"]].map(([value, label]) => ({ value, label }))} />
+            options=${[["auto", t("common.auto")], ["en", "English"], ["de", "Deutsch"], ["fr", "Français"]].map(([value, label]) => ({ value, label }))} />
         </div>
         <div class="two">
           <div class="field"><span>${t("behaviour.clock")}</span>

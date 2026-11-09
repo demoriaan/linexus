@@ -12,6 +12,7 @@ pub enum Locale {
     #[default]
     En,
     De,
+    Fr,
 }
 
 impl Locale {
@@ -26,8 +27,11 @@ impl Locale {
                 .unwrap_or_default(),
             other => other.to_string(),
         };
-        if tag.to_ascii_lowercase().starts_with("de") {
+        let tag = tag.to_ascii_lowercase();
+        if tag.starts_with("de") {
             Self::De
+        } else if tag.starts_with("fr") {
+            Self::Fr
         } else {
             Self::En
         }

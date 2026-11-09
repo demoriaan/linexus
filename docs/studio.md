@@ -4,7 +4,7 @@ Linexus Studio is the configurator for the strip. It runs on your computer as a 
 
 Studio edits `~/.config/linexus/config.json` and, for feeds and connections, `~/.config/linexus/sensors.json`. Every change is saved automatically and the daemon reloads it, so the strip shows your edits right away. Studio also works while the daemon is stopped or the strip is unplugged; only the live view of the strip is missing then.
 
-The interface is available in English and German.
+The interface is available in English, German and French.
 
 ## Layout
 
@@ -292,7 +292,7 @@ The brightness slider here changes the strip immediately and is kept across daem
 
 ## Settings
 
-- **Studio**: interface language (English or Deutsch) and appearance (System, Dark, Light). Both are stored in the browser.
+- **Studio**: interface language (English, Deutsch or Français) and appearance (System, Dark, Light). Both are stored in the browser.
 - **Backup**: **Export backup** downloads `linexus-backup.nexuspack` with all profiles, pages and images. When buttons send web requests or pass arguments to programs, a notice reminds you that keys or tokens in them travel with the file. **Import backup** first shows what the backup contains and lists every button that acts outside the strip (runs programs, types text, sends web requests, opens apps, files or links, calls Home Assistant); only **Replace configuration** applies it. The previous configuration is kept as `config.json.bak`. Feeds and connections are not part of a backup. The section also shows the path of the configuration file.
 - **Reset all pages** replaces the whole configuration, profiles and behaviour settings included, with the built-in default after you confirm it in a dialog. The previous configuration is kept as `config.json.bak`.
 - **About**: version, credits and the trademark note.

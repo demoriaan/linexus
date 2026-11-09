@@ -85,16 +85,20 @@ pub fn date(time: &LocalTime, locale: Locale) -> String {
     match locale {
         Locale::De => format!("{weekday} {}. {month}", time.day),
         Locale::En => format!("{weekday} {month} {}", time.day),
+        Locale::Fr if time.day == 1 => format!("{weekday} 1er {month}"),
+        Locale::Fr => format!("{weekday} {} {month}", time.day),
     }
 }
 
 fn weekday_short(weekday: u8, locale: Locale) -> &'static str {
     const EN: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     const DE: [&str; 7] = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+    const FR: [&str; 7] = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"];
     let i = usize::from(weekday.min(6));
     match locale {
         Locale::En => EN[i],
         Locale::De => DE[i],
+        Locale::Fr => FR[i],
     }
 }
 
@@ -105,10 +109,14 @@ fn month_short(month: u8, locale: Locale) -> &'static str {
     const DE: [&str; 12] = [
         "Jan", "Feb", "Mär", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez",
     ];
+    const FR: [&str; 12] = [
+        "Jan", "Fév", "Mars", "Avr", "Mai", "Juin", "Juil", "Août", "Sept", "Oct", "Nov", "Déc",
+    ];
     let i = usize::from(month.clamp(1, 12) - 1);
     match locale {
         Locale::En => EN[i],
         Locale::De => DE[i],
+        Locale::Fr => FR[i],
     }
 }
 
@@ -155,80 +163,177 @@ pub fn word(word: Word, locale: Locale) -> &'static str {
     match (locale, word) {
         (Locale::En, NothingPlaying) => "Nothing playing",
         (Locale::De, NothingPlaying) => "Keine Wiedergabe",
+        (Locale::Fr, NothingPlaying) => "Aucune lecture",
         (Locale::En, Paused) => "Paused",
         (Locale::De, Paused) => "Pausiert",
+        (Locale::Fr, Paused) => "En pause",
         (Locale::En, Volume) => "Volume",
         (Locale::De, Volume) => "Lautstärke",
+        (Locale::Fr, Volume) => "Volume",
         (Locale::En, Muted) => "Muted",
         (Locale::De, Muted) => "Stumm",
+        (Locale::Fr, Muted) => "Muet",
         (Locale::En, On) => "On",
         (Locale::De, On) => "An",
+        (Locale::Fr, On) => "Allumé",
         (Locale::En, Off) => "Off",
         (Locale::De, Off) => "Aus",
+        (Locale::Fr, Off) => "Éteint",
         (Locale::En, Unavailable) => "Unavailable",
         (Locale::De, Unavailable) => "Nicht erreichbar",
+        (Locale::Fr, Unavailable) => "Indisponible",
         (Locale::En, Focus) => "Focus",
         (Locale::De, Focus) => "Fokus",
+        (Locale::Fr, Focus) => "Focus",
         (Locale::En, Break) => "Break",
         (Locale::De, Break) => "Pause",
+        (Locale::Fr, Break) => "Pause",
         (Locale::En, LongBreak) => "Long break",
         (Locale::De, LongBreak) => "Lange Pause",
+        (Locale::Fr, LongBreak) => "Longue pause",
         (Locale::En, Stopwatch) => "Stopwatch",
         (Locale::De, Stopwatch) => "Stoppuhr",
+        (Locale::Fr, Stopwatch) => "Chrono",
         (Locale::En, Timer) => "Timer",
         (Locale::De, Timer) => "Timer",
+        (Locale::Fr, Timer) => "Minuteur",
         (Locale::En, TapToStart) => "Tap to start",
         (Locale::De, TapToStart) => "Tippen zum Start",
+        (Locale::Fr, TapToStart) => "Toucher pour démarrer",
         (Locale::En, Done) => "Done",
         (Locale::De, Done) => "Fertig",
+        (Locale::Fr, Done) => "Fini",
         (Locale::En, NoHeadlines) => "No headlines yet",
         (Locale::De, NoHeadlines) => "Noch keine Schlagzeilen",
+        (Locale::Fr, NoHeadlines) => "Pas encore de titres",
         (Locale::En, AddFeedsInStudio) => "Add news feeds in Linexus Studio",
         (Locale::De, AddFeedsInStudio) => "Nachrichtenquellen in Linexus Studio hinzufügen",
+        (Locale::Fr, AddFeedsInStudio) => "Ajoutez des flux dans Linexus Studio",
         (Locale::En, SetLocation) => "Set a location in Studio",
         (Locale::De, SetLocation) => "Ort in Studio festlegen",
+        (Locale::Fr, SetLocation) => "Lieu à définir dans Studio",
         (Locale::En, Loading) => "Loading…",
         (Locale::De, Loading) => "Lädt…",
+        (Locale::Fr, Loading) => "Chargement…",
         (Locale::En, Round) => "Round",
         (Locale::De, Round) => "Runde",
+        (Locale::Fr, Round) => "Cycle",
         (Locale::En, Down) => "Down",
         (Locale::De, Down) => "Runter",
+        (Locale::Fr, Down) => "Bas",
         (Locale::En, Up) => "Up",
         (Locale::De, Up) => "Hoch",
+        (Locale::Fr, Up) => "Haut",
         (Locale::En, TouchTheMark) => "Touch the center of the mark",
         (Locale::De, TouchTheMark) => "Tippe auf die Mitte der Markierung",
+        (Locale::Fr, TouchTheMark) => "Touchez le centre du repère",
     }
 }
 
 /// Lucide icon and short description for a WMO weather code.
 pub fn weather(code: u16, is_day: bool, locale: Locale) -> (&'static str, &'static str) {
     let de = locale == Locale::De;
+    let fr = locale == Locale::Fr;
     match code {
         0 => (
             if is_day { "sun" } else { "moon" },
-            if de { "Klar" } else { "Clear" },
+            if fr {
+                "Dégagé"
+            } else if de {
+                "Klar"
+            } else {
+                "Clear"
+            },
         ),
         1 | 2 => (
             if is_day { "cloud-sun" } else { "cloud-moon" },
-            if de {
+            if fr {
+                "Peu nuageux"
+            } else if de {
                 "Leicht bewölkt"
             } else {
                 "Partly cloudy"
             },
         ),
-        3 => ("cloud", if de { "Bedeckt" } else { "Overcast" }),
-        45 | 48 => ("cloud-fog", if de { "Nebel" } else { "Fog" }),
-        51..=57 => ("cloud-drizzle", if de { "Nieselregen" } else { "Drizzle" }),
-        61..=67 => ("cloud-rain", if de { "Regen" } else { "Rain" }),
-        71..=77 => ("cloud-snow", if de { "Schnee" } else { "Snow" }),
-        80..=82 => ("cloud-rain-wind", if de { "Schauer" } else { "Showers" }),
+        3 => (
+            "cloud",
+            if fr {
+                "Couvert"
+            } else if de {
+                "Bedeckt"
+            } else {
+                "Overcast"
+            },
+        ),
+        45 | 48 => (
+            "cloud-fog",
+            if fr {
+                "Brouillard"
+            } else if de {
+                "Nebel"
+            } else {
+                "Fog"
+            },
+        ),
+        51..=57 => (
+            "cloud-drizzle",
+            if fr {
+                "Bruine"
+            } else if de {
+                "Nieselregen"
+            } else {
+                "Drizzle"
+            },
+        ),
+        61..=67 => (
+            "cloud-rain",
+            if fr {
+                "Pluie"
+            } else if de {
+                "Regen"
+            } else {
+                "Rain"
+            },
+        ),
+        71..=77 => (
+            "cloud-snow",
+            if fr {
+                "Neige"
+            } else if de {
+                "Schnee"
+            } else {
+                "Snow"
+            },
+        ),
+        80..=82 => (
+            "cloud-rain-wind",
+            if fr {
+                "Averses"
+            } else if de {
+                "Schauer"
+            } else {
+                "Showers"
+            },
+        ),
         85 | 86 => (
             "cloud-snow",
-            if de { "Schneeschauer" } else { "Snow showers" },
+            if fr {
+                "Averses de neige"
+            } else if de {
+                "Schneeschauer"
+            } else {
+                "Snow showers"
+            },
         ),
         95..=99 => (
             "cloud-lightning",
-            if de { "Gewitter" } else { "Thunderstorm" },
+            if fr {
+                "Orage"
+            } else if de {
+                "Gewitter"
+            } else {
+                "Thunderstorm"
+            },
         ),
         _ => ("cloud", ""),
     }

@@ -79,7 +79,7 @@ pub fn parse_forecast(json: &str) -> Result<WeatherReport, String> {
 }
 
 /// Places matching a name ("Hamburg", "Springfield"), best match first, for
-/// the location picker. `language` localizes the names (`de`, `en`).
+/// the location picker. `language` localizes the names (`de`, `en`, `fr`).
 pub fn geocode(query: &str, language: &str) -> Result<Vec<GeoPlace>, String> {
     let query = query.trim();
     if query.chars().count() < 2 {

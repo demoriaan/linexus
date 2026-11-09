@@ -167,16 +167,24 @@ fn pixmap_png(pixmap: &Pixmap) -> Option<Vec<u8>> {
     Some(out.into_inner())
 }
 
+/// The language of place names, from Studio's interface languages.
+fn place_language(requested: Option<&str>) -> Option<&'static str> {
+    match requested {
+        None | Some("en") => Some("en"),
+        Some("de") => Some("de"),
+        Some("fr") => Some("fr"),
+        Some(_) => None,
+    }
+}
+
 fn geocode(request: &Request) -> Response {
     let query = request.query_param("q").unwrap_or_default();
     let query = query.trim();
     if query.is_empty() || query.chars().count() > MAX_QUERY_CHARS {
         return Response::error(400, format!("q must have 1..{MAX_QUERY_CHARS} characters"));
     }
-    let lang = match request.query_param("lang").as_deref() {
-        None | Some("en") => "en",
-        Some("de") => "de",
-        Some(_) => return Response::error(400, "lang must be en or de"),
+    let Some(lang) = place_language(request.query_param("lang").as_deref()) else {
+        return Response::error(400, "lang must be en, de or fr");
     };
     match providers::geocode(query, lang) {
         Ok(places) => {
@@ -286,12 +294,19 @@ mod tests {
     }
 
     #[test]
+    fn place_names_come_in_every_interface_language() {
+        assert_eq!(place_language(None), Some("en"));
+        assert_eq!(place_language(Some("fr")), Some("fr"));
+        assert_eq!(place_language(Some("es")), None);
+    }
+
+    #[test]
     fn place_and_weather_queries_are_validated() {
         let state = state();
         for path in [
             "/api/geocode",
             "/api/geocode?q=%20",
-            "/api/geocode?q=Berlin&lang=fr",
+            "/api/geocode?q=Berlin&lang=es",
         ] {
             assert_eq!(handle(&get(path), &state).status, 400, "{path}");
         }

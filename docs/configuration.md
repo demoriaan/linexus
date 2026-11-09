@@ -67,7 +67,7 @@ All fields are optional.
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `locale` | `"auto"`, `"en"`, `"de"` | `"auto"` | Language of dates and the few words on the strip. `auto` follows `LC_ALL`, `LC_MESSAGES` or `LANG` of the daemon; German when it starts with `de`, otherwise English. |
+| `locale` | `"auto"`, `"en"`, `"de"`, `"fr"` | `"auto"` | Language of dates and the few words on the strip. `auto` follows `LC_ALL`, `LC_MESSAGES` or `LANG` of the daemon; German when it starts with `de`, French when it starts with `fr`, otherwise English. |
 | `hour12` | boolean | `false` | 12-hour clock |
 | `temperature_unit` | `"celsius"`, `"fahrenheit"` | `"celsius"` | Unit for every temperature on the strip: readings, text tokens and weather |
 | `transition` | `"slide"`, `"fade"`, `"none"` | `"slide"` | Animation when the page changes |
