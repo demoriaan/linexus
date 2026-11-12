@@ -181,7 +181,8 @@ pub fn draw(canvas: &mut Canvas, b: Bounds, widget: &Widget, props: &DiscordCall
 
     // Header: channel name, then the connection.
     let header = header_width(b);
-    let name = channel.map_or("…", |c| c.name.as_str());
+    let name = channel.map_or_else(|| "…".to_string(), |c| call_name(c, info, ctx.live.locale));
+    let name = name.as_str();
     let name_style = TextStyle::new(FontFace::SemiBold, 13.0, palette.text);
     let link = info.link.filter(|_| props.show_ping);
     let name_y = if link.is_some() { 20.0 } else { 29.0 };
@@ -241,6 +242,29 @@ fn draw_microphone(canvas: &mut Canvas, ctx: &Ctx, bounds: Bounds, info: &Discor
     let size = (bounds.w * 0.59).round();
     let inset = (bounds.w - size) / 2.0;
     canvas.icon(icon, bounds.x + inset, bounds.y + inset, size, color, 1.0);
+}
+
+/// What the header calls the channel: its name, or for a private call
+/// without one, who else is in it.
+fn call_name(
+    channel: &crate::live::DiscordVoiceChannel,
+    info: &DiscordInfo,
+    locale: crate::live::Locale,
+) -> String {
+    if !channel.name.is_empty() {
+        return channel.name.clone();
+    }
+    let others: Vec<&str> = channel
+        .members
+        .iter()
+        .filter(|member| info.self_id.as_deref() != Some(member.user_id.as_str()))
+        .map(|member| member.name.as_str())
+        .collect();
+    if others.is_empty() {
+        format::word(Word::PrivateCall, locale).to_string()
+    } else {
+        others.join(", ")
+    }
 }
 
 /// Signal bars and the ping, below the channel name.
@@ -399,7 +423,7 @@ fn draw_controls(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::live::DiscordVoiceChannel;
+    use crate::live::{DiscordVoiceChannel, Locale};
     use std::collections::HashMap;
 
     fn info(members: usize) -> DiscordInfo {
@@ -495,6 +519,22 @@ mod tests {
         // button takes 44 px, the header 30 % of the other 256.
         let last = 44 + 76 + 3 * 48 + 12;
         assert_eq!(discord_call_hit(0, 300, &props, &info, last), None);
+    }
+
+    #[test]
+    fn a_private_call_is_named_after_the_others() {
+        let mut info = info(2);
+        info.guilds.get_mut("g").unwrap()[0].name = String::new();
+        info.self_id = Some("0".into());
+        let channel = info.current_channel().unwrap().clone();
+        assert_eq!(call_name(&channel, &info, Locale::Fr), "user 1");
+        info.self_id = Some("9".into());
+        assert_eq!(call_name(&channel, &info, Locale::Fr), "user 0, user 1");
+        let alone = crate::live::DiscordVoiceChannel {
+            members: Vec::new(),
+            ..channel
+        };
+        assert_eq!(call_name(&alone, &info, Locale::Fr), "Appel privé");
     }
 
     #[test]
