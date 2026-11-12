@@ -209,10 +209,14 @@ function Discord() {
         ${result?.error && html`<span class="bad-text">${result.error}</span>`}
         ${!result && user && html`<span class="ok-text">${t("discord.connected", { user })}</span>`}
         ${clientNote && html`<span class=${client === "not_running" ? "hint" : "bad-text"}>${clientNote}</span>`}
-        ${user && !status?.notifications && shown.notifications && html`<span class="hint">${t("discord.reconnect.notifications")}</span>`}
         <hr class="divider" />
         <div class="field inline"><span>${t("discord.notifications")}</span><${Switch} ariaLabel=${t("discord.notifications")} checked=${shown.notifications} onChange=${(notifications) => setShown({ notifications })} /></div>
         <small class="hint" style=${{ marginTop: "-8px" }}>${t("discord.notifications.hint")}</small>
+        ${user && !status?.notifications && shown.notifications && html`
+          <div class="row">
+            <span class="bad-text">${t("discord.reconnect.notifications")}</span>
+            <button class="btn small primary" onClick=${connect} disabled=${busy || changed}>${busy ? t("discord.connecting") : t("discord.connect")}</button>
+          </div>`}
         ${shown.notifications && html`<${Field} label=${t("discord.scroll")} hint=${t("discord.scroll.hint")}>
           <${Select} value=${shown.scroll} options=${["direct", "all", "never"]} labelOf=${(o) => t(`discord.scroll.${o}`)} onChange=${(scroll) => setShown({ scroll })} />
         <//>`}

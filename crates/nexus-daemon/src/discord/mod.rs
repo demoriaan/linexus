@@ -65,6 +65,10 @@ const MAX_NOTIFICATIONS: usize = 8;
 /// Percent per press of the volume buttons.
 const VOLUME_STEP: u8 = 10;
 const NOT_CONNECTED: &str = "Discord is not connected";
+/// Where a direct or group call is kept among the servers' channels.
+pub(crate) const PRIVATE: &str = "@me";
+const RECONNECT_FOR_NOTIFICATIONS: &str =
+    "notifications need Connect clicked again in Studio, under Connections";
 
 type LoadApp = Box<dyn Fn() -> Option<DiscordApp> + Send>;
 
@@ -217,6 +221,7 @@ impl Discord {
             load: Box::new(|| nexus_sensors::load_sensor_config().discord),
             images: images::Images::start(),
             policy: worker::Policy::start(),
+            told_reconnect: false,
         };
         let started = thread::Builder::new()
             .name("discord".into())

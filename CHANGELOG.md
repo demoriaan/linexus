@@ -2,6 +2,16 @@
 
 All notable changes to this project are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- The Discord call widget follows direct and group calls as well as server voice channels. A call without a name is named after the others in it.
+
+### Changed
+
+- When Discord has not allowed notifications yet (a connection made before Linexus asked for them), Studio says so next to the notifications switch with a Connect button, and the strip says so once when the daemon connects.
+
 ## [1.4.0] - 2026-11-09
 
 ### Added
