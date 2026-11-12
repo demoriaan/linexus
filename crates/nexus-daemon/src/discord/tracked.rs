@@ -1,7 +1,7 @@
 //! What the worker follows while signed in, and what each RPC event changes.
 
 use super::images::Images;
-use super::Wanted;
+use super::{Wanted, PRIVATE};
 use nexus_render::{DiscordInfo, DiscordLink, DiscordMember, DiscordVoiceChannel};
 use nexus_sensors::{DiscordEvent, DiscordVoiceMember};
 use serde_json::Value;
@@ -146,7 +146,16 @@ impl Tracked {
     pub(super) fn guilds_for(&self, wanted: &Wanted) -> BTreeSet<String> {
         let mut guilds = wanted.guilds.clone();
         if wanted.current_guild {
-            guilds.extend(self.guild.clone());
+            match &self.guild {
+                Some(guild) => {
+                    guilds.insert(guild.clone());
+                }
+                // A call outside any server: a direct or group call.
+                None if self.channel.is_some() => {
+                    guilds.insert(PRIVATE.to_string());
+                }
+                None => {}
+            }
         }
         guilds
     }

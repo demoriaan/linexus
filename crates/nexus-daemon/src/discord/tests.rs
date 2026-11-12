@@ -279,3 +279,27 @@ fn only_a_repeat_of_a_message_counts_as_its_desktop_copy() {
     assert!(!recent.repeats("", t + Duration::from_secs(1)));
     assert!(!recent.repeats("see you at eight", t + Duration::from_secs(6)));
 }
+
+#[test]
+fn a_private_call_is_followed_like_a_server() {
+    let wanted = Wanted {
+        current_guild: true,
+        ..Wanted::default()
+    };
+    let mut tracked = Tracked {
+        channel: Some("77".into()),
+        ..Tracked::default()
+    };
+    assert_eq!(
+        tracked.guilds_for(&wanted),
+        BTreeSet::from([PRIVATE.to_string()])
+    );
+    tracked.channel = None;
+    assert!(tracked.guilds_for(&wanted).is_empty());
+    tracked.guild = Some("5".into());
+    tracked.channel = Some("6".into());
+    assert_eq!(
+        tracked.guilds_for(&wanted),
+        BTreeSet::from(["5".to_string()])
+    );
+}

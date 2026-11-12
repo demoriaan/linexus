@@ -320,7 +320,7 @@ Built-in tap: joins the voice channel you tap; on the channel you are already in
 
 ### discord_call
 
-The voice channel you are in: its name and the voice connection's ping on the left (green signal under 100 ms, amber under 250 ms, red above), then everyone in it with their picture and name, a green ring around whoever speaks, and badges for muted, deafened and muted-for-you members. Says so when you are in no voice channel. On the left, a button for your microphone stays visible whatever the row shows, also outside a call: a solid red tile while you are muted or deafened, a green microphone otherwise.
+The voice channel you are in, or the direct or group call (named after the others in it when it has no name): its name and the voice connection's ping on the left (green signal under 100 ms, amber under 250 ms, red above), then everyone in it with their picture and name, a green ring around whoever speaks, and badges for muted, deafened and muted-for-you members. Says so when you are in no voice channel. On the left, a button for your microphone stays visible whatever the row shows, also outside a call: a solid red tile while you are muted or deafened, a green microphone otherwise.
 
 | Field | Default | Meaning |
 |---|---|---|
@@ -541,7 +541,7 @@ Controls the Discord desktop app through its local RPC socket. Only a socket who
 
 Discord opens this socket only to applications it approved, and to up to 50 testers of others. Linexus therefore uses an application you create yourself in the [Discord developer portal](https://discord.com/developers/applications): add `http://localhost` under OAuth2 → Redirects (Discord refuses applications without a redirect, even though the local flow never opens it), paste the Client ID and Client Secret in Studio under Connections, click Connect and accept the prompt Discord shows. The secret and the tokens stay in `sensors.json` (mode 0600); the tokens never reach the browser, and the daemon renews them before they expire.
 
-Notifications need the `rpc.notifications.read` permission, which Linexus asks for since it shows them: connections made before need Connect clicked once more, and Studio says so. A tapped notification opens `discord://-/channels/…` with the desktop's handler for Discord links.
+Notifications need the `rpc.notifications.read` permission, which Linexus asks for since it shows them: connections made before need Connect clicked once more. Until then, Studio says so next to the switch, and the strip says so once when the daemon connects. A tapped notification opens `discord://-/channels/…` with the desktop's handler for Discord links.
 
 Only the official Discord app (stable, PTB, Canary, also as Flatpak or Snap) offers voice control. Vesktop and other clients that use arRPC only share what you play; Studio says so when only such a client answers.
 
