@@ -3734,6 +3734,7 @@ PID PPID COMMAND RSS %CPU COMMAND
             expires_at: 1,
             user: String::new(),
             scopes: Vec::new(),
+            notifications_refused: false,
         };
 
         update_sensor_config(|config| {

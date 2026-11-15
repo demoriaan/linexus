@@ -98,11 +98,22 @@ pub struct DiscordToken {
     /// What the user allowed; empty for tokens stored before Linexus kept it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scopes: Vec<String>,
+    /// Discord was asked for the notifications and left them out, so
+    /// connecting again would not add them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub notifications_refused: bool,
 }
 
 impl DiscordToken {
     pub fn has_scope(&self, scope: &str) -> bool {
         self.scopes.iter().any(|s| s == scope)
+    }
+
+    /// True when connecting again would add the notifications: the token
+    /// lacks them because it predates Linexus asking, not because Discord
+    /// said no.
+    pub fn notifications_need_reconnect(&self) -> bool {
+        !self.has_scope(NOTIFICATIONS_SCOPE) && !self.notifications_refused
     }
 
     fn wants_renewal(&self, now: u64) -> bool {
@@ -588,15 +599,13 @@ pub fn authorize(app: &DiscordApp, wait: Duration) -> Result<DiscordToken, Disco
         return Err(DiscordError::OAuth("the client secret is missing".into()));
     }
     let mut connection = DiscordConnection::connect(&app.client_id, COMMAND_TIMEOUT)?;
+    let mut asked = SCOPES.to_vec();
     let code = match connection.authorize(&app.client_id, wait) {
         // Should Discord refuse the notifications to this application,
         // voice control alone still works.
         Err(DiscordError::Denied(detail)) if detail.contains("scope") => {
-            let voice: Vec<&str> = SCOPES
-                .into_iter()
-                .filter(|scope| *scope != NOTIFICATIONS_SCOPE)
-                .collect();
-            connection.authorize_scopes(&app.client_id, &voice, wait)?
+            asked.retain(|scope| *scope != NOTIFICATIONS_SCOPE);
+            connection.authorize_scopes(&app.client_id, &asked, wait)?
         }
         other => other?,
     };
@@ -615,25 +624,44 @@ pub fn authorize(app: &DiscordApp, wait: Duration) -> Result<DiscordToken, Disco
         other => other?,
     };
     token.user = connection.authenticate(&token.access_token)?;
-    Ok(token)
+    Ok(granted(token, &asked))
+}
+
+/// A token straight from the prompt, given what Linexus asked for. An
+/// answer without `scope` grants all of it (RFC 6749, section 5.1). Linexus
+/// asked for the notifications just now, so without them in the answer
+/// Discord does not give them to this application.
+fn granted(mut token: DiscordToken, asked: &[&str]) -> DiscordToken {
+    if token.scopes.is_empty() {
+        token.scopes = asked.iter().map(|scope| scope.to_string()).collect();
+    }
+    token.notifications_refused = !token.has_scope(NOTIFICATIONS_SCOPE);
+    token
 }
 
 fn renew(app: &DiscordApp, token: &DiscordToken) -> Result<DiscordToken, DiscordError> {
-    let mut fresh = trade(
+    let fresh = trade(
         app,
         &[
             ("grant_type", "refresh_token"),
             ("refresh_token", &token.refresh_token),
         ],
     )?;
+    Ok(renewed(fresh, token))
+}
+
+/// A renewed token keeps from the old one what the answer leaves out.
+fn renewed(mut fresh: DiscordToken, old: &DiscordToken) -> DiscordToken {
     if fresh.refresh_token.is_empty() {
-        fresh.refresh_token = token.refresh_token.clone();
+        fresh.refresh_token = old.refresh_token.clone();
     }
     if fresh.scopes.is_empty() {
-        fresh.scopes = token.scopes.clone();
+        fresh.scopes = old.scopes.clone();
     }
-    fresh.user = token.user.clone();
-    Ok(fresh)
+    fresh.user = old.user.clone();
+    fresh.notifications_refused =
+        old.notifications_refused && !fresh.has_scope(NOTIFICATIONS_SCOPE);
+    fresh
 }
 
 fn trade(app: &DiscordApp, grant: &[(&str, &str)]) -> Result<DiscordToken, DiscordError> {
@@ -675,6 +703,7 @@ fn parse_token(response: &HttpResponse, now: u64) -> Result<DiscordToken, Discor
             .split_whitespace()
             .map(str::to_string)
             .collect(),
+        notifications_refused: false,
     })
 }
 
@@ -1003,6 +1032,72 @@ mod tests {
     }
 
     #[test]
+    fn only_a_token_from_before_the_notifications_needs_connecting_again() {
+        let voice_only = HttpResponse {
+            status: 200,
+            body: br#"{"access_token":"a","scope":"rpc identify"}"#.to_vec(),
+        };
+        let mut token = parse_token(&voice_only, 0).unwrap();
+        assert!(token.notifications_need_reconnect());
+        let stored = serde_json::to_value(&token).unwrap();
+        assert!(stored.get("notifications_refused").is_none());
+        token.notifications_refused = true;
+        assert!(!token.notifications_need_reconnect());
+        let stored = serde_json::to_value(&token).unwrap();
+        assert_eq!(stored["notifications_refused"], true);
+        let read: DiscordToken = serde_json::from_value(stored).unwrap();
+        assert!(read.notifications_refused);
+        let old: DiscordToken =
+            serde_json::from_str(r#"{"access_token":"a","expires_at":1}"#).unwrap();
+        assert!(!old.notifications_refused);
+        assert!(old.notifications_need_reconnect());
+    }
+
+    #[test]
+    fn a_new_token_says_whether_discord_left_the_notifications_out() {
+        let answer = |scope: &str| {
+            let body = format!(r#"{{"access_token":"a","refresh_token":"r"{scope}}}"#);
+            parse_token(
+                &HttpResponse {
+                    status: 200,
+                    body: body.into_bytes(),
+                },
+                0,
+            )
+            .unwrap()
+        };
+        let voice: Vec<&str> = SCOPES
+            .into_iter()
+            .filter(|scope| *scope != NOTIFICATIONS_SCOPE)
+            .collect();
+
+        let all = granted(
+            answer(r#","scope":"rpc identify rpc.notifications.read""#),
+            &SCOPES,
+        );
+        assert!(!all.notifications_refused && !all.notifications_need_reconnect());
+        let left_out = granted(answer(r#","scope":"rpc identify""#), &SCOPES);
+        assert!(left_out.notifications_refused && !left_out.notifications_need_reconnect());
+        let fell_back = granted(answer(""), &voice);
+        assert_eq!(fell_back.scopes, voice);
+        assert!(fell_back.notifications_refused);
+        // No `scope` in the answer: everything asked for was granted.
+        let silent = granted(answer(""), &SCOPES);
+        assert_eq!(silent.scopes, SCOPES);
+        assert!(!silent.notifications_refused);
+
+        let mut stored = left_out.clone();
+        stored.user = "Axel".into();
+        let kept = renewed(answer(""), &stored);
+        assert_eq!(kept.user, "Axel");
+        assert_eq!(kept.scopes, stored.scopes);
+        assert!(kept.notifications_refused);
+        let now_allowed = renewed(answer(r#","scope":"rpc rpc.notifications.read""#), &stored);
+        assert!(!now_allowed.notifications_refused);
+        assert!(!now_allowed.notifications_need_reconnect());
+    }
+
+    #[test]
     fn token_answers_and_refusals() {
         let ok = HttpResponse {
             status: 200,
@@ -1014,6 +1109,7 @@ mod tests {
         assert_eq!(token.expires_at, 1000 + 604800);
         assert!(!token.wants_renewal(1000));
         assert!(token.wants_renewal(1000 + 604800 - 60));
+        assert!(!token.notifications_need_reconnect());
         let refused = HttpResponse {
             status: 400,
             body: br#"{"error":"invalid_grant","error_description":"Invalid \"redirect_uri\" in request."}"#.to_vec(),

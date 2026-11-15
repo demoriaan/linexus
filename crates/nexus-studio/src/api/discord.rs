@@ -73,6 +73,14 @@ fn status() -> Response {
                 .as_ref()
                 .and_then(|app| app.token.as_ref())
                 .is_some_and(|token| token.has_scope(nexus_sensors::DISCORD_NOTIFICATIONS_SCOPE)),
+            // Discord left them out when asked: connecting again would not help.
+            "notifications_refused": app
+                .as_ref()
+                .and_then(|app| app.token.as_ref())
+                .is_some_and(|token| {
+                    token.notifications_refused
+                        && !token.has_scope(nexus_sensors::DISCORD_NOTIFICATIONS_SCOPE)
+                }),
         }),
     )
 }
@@ -192,6 +200,7 @@ mod tests {
                 expires_at: 1,
                 user: String::new(),
                 scopes: Vec::new(),
+                notifications_refused: false,
             }),
         }
     }

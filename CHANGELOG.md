@@ -10,7 +10,7 @@ All notable changes to this project are listed here. The format follows [Keep a 
 
 ### Changed
 
-- When Discord has not allowed notifications yet (a connection made before Linexus asked for them), Studio says so next to the notifications switch with a Connect button, and the strip says so once when the daemon connects.
+- When Discord has not allowed notifications yet (a connection made before Linexus asked for them), Studio says so next to the notifications switch with a Connect button, and the strip says so once when the daemon connects. When Discord left the notifications out although Linexus asked for them, Studio says that instead, since connecting again would not add them.
 
 ## [1.4.0] - 2026-11-09
 

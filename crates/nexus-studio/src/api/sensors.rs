@@ -672,6 +672,7 @@ mod tests {
                     expires_at: 1,
                     user: "Axel".into(),
                     scopes: Vec::new(),
+                    notifications_refused: false,
                 }),
             }),
             ..nexus_sensors::SensorConfig::default()

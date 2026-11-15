@@ -254,10 +254,18 @@ impl Worker {
         let mut notifying = false;
         let mut notify_refused = false;
         let wants_notifications = self.wanted().flatten().is_some_and(|w| w.notifications);
-        if wants_notifications && !may_notify && !std::mem::replace(&mut self.told_reconnect, true)
+        let reconnect_adds_them = app
+            .token
+            .as_ref()
+            .is_some_and(nexus_sensors::DiscordToken::notifications_need_reconnect);
+        if wants_notifications
+            && reconnect_adds_them
+            && !std::mem::replace(&mut self.told_reconnect, true)
         {
             // A token from before Linexus asked for notifications: they can
-            // only come after the user allows them in Discord's prompt.
+            // only come after the user allows them in Discord's prompt. When
+            // Discord left them out although Linexus asked, connecting again
+            // would not help, so the strip keeps quiet.
             log_fields(
                 &self.logger,
                 Level::Warn,

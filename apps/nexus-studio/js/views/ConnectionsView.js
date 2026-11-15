@@ -212,7 +212,8 @@ function Discord() {
         <hr class="divider" />
         <div class="field inline"><span>${t("discord.notifications")}</span><${Switch} ariaLabel=${t("discord.notifications")} checked=${shown.notifications} onChange=${(notifications) => setShown({ notifications })} /></div>
         <small class="hint" style=${{ marginTop: "-8px" }}>${t("discord.notifications.hint")}</small>
-        ${user && !status?.notifications && shown.notifications && html`
+        ${user && status?.notifications_refused && shown.notifications && html`<small class="hint">${t("discord.notifications.refused")}</small>`}
+        ${user && !status?.notifications && !status?.notifications_refused && shown.notifications && html`
           <div class="row">
             <span class="bad-text">${t("discord.reconnect.notifications")}</span>
             <button class="btn small primary" onClick=${connect} disabled=${busy || changed}>${busy ? t("discord.connecting") : t("discord.connect")}</button>
