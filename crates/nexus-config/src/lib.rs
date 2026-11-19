@@ -1,11 +1,13 @@
 //! Profiles, pages, widgets and actions for the Nexus strip.
 
 mod actions;
+mod audio;
 mod defaults;
 mod migrate;
 mod model;
 mod validate;
 
+pub use audio::*;
 pub use defaults::{
     button, default_config, template_page, PageTemplate, DEFAULT_BROWSER, DEFAULT_FILES,
     DEFAULT_MAIL, DEFAULT_PROFILE_ID, DEFAULT_TERMINAL,
@@ -13,7 +15,7 @@ pub use defaults::{
 pub use migrate::{migrate, MigrationReport};
 pub use model::*;
 pub use validate::{
-    validate, ConfigError, Result, MAX_IMAGE_DATA_URL_BYTES, MAX_SEQUENCE_DELAY_MS,
+    is_valid_host, validate, ConfigError, Result, MAX_IMAGE_DATA_URL_BYTES, MAX_SEQUENCE_DELAY_MS,
     MAX_SEQUENCE_STEPS,
 };
 
@@ -206,5 +208,7 @@ pub fn to_pretty_json(config: &NexusConfig) -> serde_json::Result<String> {
     })
 }
 
+#[cfg(test)]
+mod audio_tests;
 #[cfg(test)]
 mod tests;

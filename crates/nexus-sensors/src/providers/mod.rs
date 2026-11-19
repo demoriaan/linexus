@@ -1,7 +1,7 @@
 //! Data providers for panel widgets: metric catalog, hwmon, NVIDIA GPUs,
-//! batteries, media, weather, applications, Home Assistant, notifications
-//! and command output. Each talks to the system through files or small
-//! helper programs, so the crate needs no D-Bus or HTTP library.
+//! batteries, media, weather, applications, Home Assistant, notifications,
+//! command output and ping. Each talks to the system through files, sockets
+//! or small helper programs, so the crate needs no D-Bus or HTTP library.
 
 pub mod apps;
 pub mod battery;
@@ -15,4 +15,5 @@ pub mod media;
 pub mod metrics;
 pub mod notify;
 pub mod nvidia;
+pub mod ping;
 pub mod weather;

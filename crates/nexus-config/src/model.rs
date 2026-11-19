@@ -5,6 +5,7 @@
 //! every X position belongs to at most one widget, and that widget decides
 //! what a tap, double tap or hold at that position means.
 
+use crate::audio::{AudioOutputProps, AudioSettings, MicrophoneProps, MixerProps};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::str::FromStr;
@@ -38,7 +39,9 @@ pub struct Settings {
     pub notifications: NotificationSettings,
     pub overlays: OverlaySettings,
     pub discord: DiscordSettings,
+    pub audio: AudioSettings,
     pub touch: TouchCorrection,
+    pub ping: PingSettings,
 }
 
 impl Default for Settings {
@@ -53,7 +56,9 @@ impl Default for Settings {
             notifications: NotificationSettings::default(),
             overlays: OverlaySettings::default(),
             discord: DiscordSettings::default(),
+            audio: AudioSettings::default(),
             touch: TouchCorrection::default(),
+            ping: PingSettings::default(),
         }
     }
 }
@@ -140,15 +145,28 @@ impl Default for NotificationSettings {
 pub struct OverlaySettings {
     /// Briefly show a volume bar when the system volume changes.
     pub volume: bool,
+    /// While an app records from a microphone or uses a camera, a red pill
+    /// at the right edge of every page names it.
+    pub privacy: bool,
     /// Briefly show the new track when the playing track changes.
     pub now_playing: bool,
+    /// Show new items of breaking-news feeds as a banner.
+    pub alerts: bool,
+    /// How long a breaking-news banner stays.
+    pub alert_duration_ms: u32,
 }
+
+/// Shortest and longest time a breaking-news banner may stay.
+pub const ALERT_DURATION_MS: std::ops::RangeInclusive<u32> = 5_000..=120_000;
 
 impl Default for OverlaySettings {
     fn default() -> Self {
         Self {
             volume: true,
+            privacy: true,
             now_playing: true,
+            alerts: true,
+            alert_duration_ms: 20_000,
         }
     }
 }
@@ -207,6 +225,38 @@ impl Default for DiscordSettings {
             scroll: NotificationScroll::Direct,
         }
     }
+}
+
+/// The host ping widgets without one of their own measure, and how often
+/// hosts are pinged.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct PingSettings {
+    /// Host name or IP address; also the host of `net.ping`,
+    /// `net.ping.jitter` and `net.ping.loss`.
+    pub host: String,
+    /// Time from one probe to the next.
+    pub interval_ms: u32,
+}
+
+pub const DEFAULT_PING_HOST: &str = "1.1.1.1";
+pub const MIN_PING_INTERVAL_MS: u32 = 250;
+pub const MAX_PING_INTERVAL_MS: u32 = 60_000;
+/// Highest warn or critical threshold of a ping widget.
+pub const MAX_PING_THRESHOLD_MS: u32 = 10_000;
+
+impl Default for PingSettings {
+    fn default() -> Self {
+        Self {
+            host: DEFAULT_PING_HOST.into(),
+            interval_ms: 1000,
+        }
+    }
+}
+
+/// Metric ids measured by pinging `settings.ping.host`.
+pub fn is_ping_metric(id: &str) -> bool {
+    id == "net.ping" || id.starts_with("net.ping.")
 }
 
 /// Which long Discord notifications scroll to the end of their text; the
@@ -349,6 +399,31 @@ impl Widget {
     pub fn contains(&self, x: u16) -> bool {
         x >= self.x && x < self.end()
     }
+
+    /// The host the daemon pings for this widget: a ping widget's own host
+    /// or `settings.ping.host`, which also serves the `net.ping*` readings
+    /// of metric and text widgets.
+    pub fn ping_host<'a>(&'a self, settings: &'a PingSettings) -> Option<&'a str> {
+        let reads = match &self.kind {
+            WidgetKind::Ping(props) => {
+                return Some(props.host.as_deref().unwrap_or(&settings.host))
+            }
+            WidgetKind::Metric(props) => {
+                is_ping_metric(&props.source)
+                    || props.secondary.as_deref().is_some_and(is_ping_metric)
+            }
+            WidgetKind::Text(props) => text_tokens(&props.text).any(is_ping_metric),
+            _ => false,
+        };
+        reads.then_some(settings.host.as_str())
+    }
+}
+
+/// The `{token}` names in a text widget's text, trimmed.
+pub fn text_tokens(text: &str) -> impl Iterator<Item = &str> {
+    text.split('{')
+        .skip(1)
+        .filter_map(|rest| rest.split_once('}').map(|(token, _)| token.trim()))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -369,6 +444,10 @@ pub enum WidgetKind {
     Command(CommandProps),
     DiscordVoice(DiscordVoiceProps),
     DiscordCall(DiscordCallProps),
+    Ping(PingProps),
+    AudioOutput(AudioOutputProps),
+    Mixer(MixerProps),
+    Microphone(MicrophoneProps),
     Spacer,
 }
 
@@ -390,6 +469,10 @@ impl WidgetKind {
             Self::Command(_) => "command",
             Self::DiscordVoice(_) => "discord_voice",
             Self::DiscordCall(_) => "discord_call",
+            Self::Ping(_) => "ping",
+            Self::AudioOutput(_) => "audio_output",
+            Self::Mixer(_) => "mixer",
+            Self::Microphone(_) => "microphone",
             Self::Spacer => "spacer",
         }
     }
@@ -511,6 +594,30 @@ impl Default for DiscordCallProps {
         Self {
             show_names: true,
             show_ping: true,
+        }
+    }
+}
+
+/// Round trips to a host: the latest one, a graph of the last probes with
+/// the lost ones marked, jitter and packet loss.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct PingProps {
+    /// Host name or IP address; `settings.ping.host` when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// Round trip in milliseconds from which the reading turns amber...
+    pub warn_ms: u32,
+    /// ...and red; also red while more than 2 % of the probes are lost.
+    pub critical_ms: u32,
+}
+
+impl Default for PingProps {
+    fn default() -> Self {
+        Self {
+            host: None,
+            warn_ms: 60,
+            critical_ms: 120,
         }
     }
 }
@@ -804,6 +911,13 @@ pub enum ActionSpec {
         percent: Option<u8>,
     },
     MicrophoneMute,
+    /// Sends the sound to an output device: the one named, or the next of
+    /// several in turn (all shown outputs when none are named).
+    AudioOutput {
+        /// PipeWire `node.name`s of the output devices.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        devices: Vec<String>,
+    },
     KeyboardShortcut {
         keys: Vec<String>,
     },

@@ -168,6 +168,11 @@ impl MetricsHandle {
         });
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_snapshot(&self, snapshot: Arc<MetricsSnapshot>) {
+        lock(&self.shared.latest).snapshot = snapshot;
+    }
+
     /// Asks the worker for a fresh snapshot now instead of at its next tick.
     pub(crate) fn request_refresh(&self) {
         lock(&self.shared.control).refresh = true;

@@ -3,32 +3,57 @@
 // feeds and headline pacing.
 import { html, useEffect, useRef, useState } from "../lib/html.js";
 import { api } from "../lib/api.js";
-import { t } from "../lib/i18n.js";
+import { lang, t } from "../lib/i18n.js";
 import { Icon } from "../lib/icons.js";
 import { sensors, sensorsError, loadSensors, saveNews } from "../lib/sensors.js";
 import { toast, uniqueId } from "../lib/store.js";
 import { ConfirmButton, Switch } from "../components/Dialog.js";
 
-// Feed addresses checked against the live sites.
-const SUGGESTIONS = [
-  ["tagesschau", "https://www.tagesschau.de/index~rss2.xml"],
-  ["SPIEGEL", "https://www.spiegel.de/schlagzeilen/index.rss"],
-  ["ZEIT", "https://newsfeed.zeit.de/index"],
-  ["FAZ", "https://www.faz.net/rss/aktuell/"],
-  ["Süddeutsche", "https://rss.sueddeutsche.de/rss/Topthemen"],
-  ["n-tv", "https://www.n-tv.de/rss"],
-  ["Deutschlandfunk", "https://www.deutschlandfunk.de/nachrichten-100.rss"],
-  ["heise", "https://www.heise.de/rss/heise-atom.xml"],
-  ["golem", "https://rss.golem.de/rss.php?feed=RSS2.0"],
-  ["t3n", "https://t3n.de/rss.xml"],
-  ["ComputerBase", "https://www.computerbase.de/rss/news.xml"],
-  ["netzpolitik.org", "https://netzpolitik.org/feed/"],
-  ["BBC News", "https://feeds.bbci.co.uk/news/rss.xml"],
-  ["The Verge", "https://www.theverge.com/rss/index.xml"],
-  ["Ars Technica", "https://feeds.arstechnica.com/arstechnica/index"],
-  ["Hacker News", "https://hnrss.org/frontpage"],
-  ["Phoronix", "https://www.phoronix.com/rss.php"],
-];
+// Feed addresses checked against the live sites, by language. `alert`
+// sources mark breaking news themselves (the tagesschau API is not RSS);
+// `refresh` follows what the site allows.
+const SUGGESTIONS = {
+  de: [
+    { name: "tagesschau Eilmeldungen", url: "https://www.tagesschau.de/api2u/homepage/", alert: true, refresh: 120 },
+    { name: "SPIEGEL Eilmeldungen", url: "https://www.spiegel.de/schlagzeilen/eilmeldungen/index.rss", alert: true, refresh: 300 },
+    { name: "tagesschau", url: "https://www.tagesschau.de/index~rss2.xml" },
+    { name: "kicker", url: "https://newsfeed.kicker.de/news/aktuell", perDay: 80 },
+    { name: "sportschau", url: "https://www.sportschau.de/index~rss2.xml" },
+    { name: "SPIEGEL", url: "https://www.spiegel.de/schlagzeilen/index.rss" },
+    { name: "ZEIT", url: "https://newsfeed.zeit.de/index" },
+    { name: "FAZ", url: "https://www.faz.net/rss/aktuell/" },
+    { name: "Süddeutsche", url: "https://rss.sueddeutsche.de/rss/Topthemen" },
+    { name: "n-tv", url: "https://www.n-tv.de/rss" },
+    { name: "Deutschlandfunk", url: "https://www.deutschlandfunk.de/nachrichten-100.rss" },
+    { name: "heise", url: "https://www.heise.de/rss/heise-atom.xml" },
+    { name: "golem", url: "https://rss.golem.de/rss.php?feed=RSS2.0" },
+    { name: "t3n", url: "https://t3n.de/rss.xml" },
+    { name: "ComputerBase", url: "https://www.computerbase.de/rss/news.xml" },
+    { name: "netzpolitik.org", url: "https://netzpolitik.org/feed/" },
+  ],
+  en: [
+    { name: "BBC News", url: "https://feeds.bbci.co.uk/news/rss.xml" },
+    { name: "Sky News", url: "https://feeds.skynews.com/feeds/rss/home.xml" },
+    { name: "The Guardian World", url: "https://www.theguardian.com/world/rss" },
+    { name: "BBC Sport", url: "https://feeds.bbci.co.uk/sport/rss.xml" },
+    { name: "Sky Sports", url: "https://www.skysports.com/rss/12040" },
+    { name: "The Verge", url: "https://www.theverge.com/rss/index.xml" },
+    { name: "Ars Technica", url: "https://feeds.arstechnica.com/arstechnica/index" },
+    { name: "Hacker News", url: "https://hnrss.org/frontpage" },
+    { name: "Phoronix", url: "https://www.phoronix.com/rss.php" },
+  ],
+  fr: [
+    { name: "franceinfo Les titres", url: "https://www.francetvinfo.fr/titres.rss" },
+    { name: "Le Monde À la une", url: "https://www.lemonde.fr/rss/une.xml" },
+    { name: "France 24", url: "https://www.france24.com/fr/rss" },
+    { name: "franceinfo Sports", url: "https://www.francetvinfo.fr/sports.rss" },
+    { name: "L'Équipe", url: "https://dwh.lequipe.fr/api/edito/rss?path=/", perDay: 130 },
+  ],
+};
+// Each group is headed by its language's own name.
+const LANGUAGES = { de: "Deutsch", en: "English", fr: "Français" };
+// More breaking news a day than this, without keywords, gets a warning.
+const BUSY_PER_DAY = 20;
 
 const DISPLAY_DEFAULTS = { scroll_speed_px_per_sec: 50, start_pause_ms: 2000, end_pause_ms: 1500, min_pair_ms: 5000, hold_to_dismiss_ms: 600 };
 const seconds = (ms) => `${(ms / 1000).toFixed(ms % 1000 ? 2 : 1)} s`;
@@ -39,7 +64,9 @@ const DISPLAY_FIELDS = [
   ["min_pair_ms", 2000, 30000, 500, seconds],
   ["hold_to_dismiss_ms", 300, 2000, 50, (v) => `${(v / 1000).toFixed(2)} s`],
 ];
-const REFRESH_MINUTES = [5, 10, 15, 30, 60, 120, 240];
+const REFRESH_MINUTES = [1, 2, 5, 10, 15, 30, 60, 120, 240];
+// The daemon checks breaking-news feeds at least this often.
+const ALERT_MAX_REFRESH_MINUTES = 15;
 
 const host = (url) => {
   try {
@@ -100,6 +127,7 @@ export function NewsView() {
   if (!rss) return html`<div class="view"><div class="empty"><${Icon} name="loader" />${t("common.loading")}</div></div>`;
 
   const titles = sensors.value?.feed_titles ?? {};
+  const rates = sensors.value?.feed_rates ?? {};
   const setFeed = (i, patch) => commit(rss.map((f, j) => (j === i ? { ...f, ...patch } : f)), display);
   const moveFeed = (i, d) => {
     const next = [...rss];
@@ -125,7 +153,7 @@ export function NewsView() {
             <header><h3>${t("news.sources")}</h3><span class="hint">${t("news.sources.count", { n: rss.length })}</span></header>
             ${!rss.length && html`<div class="empty"><${Icon} name="newspaper" />${t("news.sources.empty")}</div>`}
             ${rss.map((feed, i) => html`
-              <${FeedRow} key=${feed.id} feed=${feed} title=${titles[feed.id] || host(feed.url)} first=${i === 0} last=${i === rss.length - 1}
+              <${FeedRow} key=${feed.id} feed=${feed} title=${titles[feed.id] || host(feed.url)} rate=${rates[feed.id]} first=${i === 0} last=${i === rss.length - 1}
                 onChange=${(patch) => setFeed(i, patch)} onMove=${(d) => moveFeed(i, d)} onRemove=${() => commit(rss.filter((_, j) => j !== i), display)} />`)}
           </section>
         </div>
@@ -149,6 +177,7 @@ export function NewsView() {
               <li>${t("news.gesture.tap")}</li>
               <li>${t("news.gesture.double")}</li>
               <li>${t("news.gesture.hold")}</li>
+              <li>${t("news.gesture.alert")}</li>
             </ul>
           </section>
         </div>
@@ -160,25 +189,33 @@ function AddSource({ rss, onAdd }) {
   const [address, setAddress] = useState("");
   const [result, setResult] = useState(null);
   const seq = useRef(0);
-  const check = async (raw) => {
+  const check = async (raw, preset = {}) => {
     const url = normalize(raw);
     if (!url) return;
     const mine = ++seq.current;
     setResult({ loading: true, url });
     try {
       const data = await api.post("/api/sensors/rss/inspect", { url });
-      if (mine === seq.current) setResult({ feed: data.feed });
+      if (mine === seq.current) setResult({ feed: data.feed, preset });
     } catch (error) {
       if (mine === seq.current) setResult({ error: error.body?.error || error.message });
     }
   };
-  const add = (feed) => {
+  const add = (feed, preset) => {
     const id = uniqueId(feed.suggested_id || "feed", new Set(rss.map((f) => f.id)));
-    onAdd({ id, url: feed.feed_url, limit: 3, refresh_seconds: 900, show_mode: "unread_first", priority: 0, tap_behavior: "open_url" });
+    // The tagesschau API brings only breaking news and allows a request a
+    // minute; two minutes keep well within that.
+    const api2u = feed.format === "tagesschau";
+    onAdd({
+      id, url: feed.feed_url, limit: 3, refresh_seconds: preset.refresh ?? (api2u ? 120 : 900), show_mode: "unread_first", priority: 0, tap_behavior: "open_url",
+      ...(api2u ? { format: "tagesschau" } : {}), alert: preset.alert ?? api2u, alert_keywords: [],
+    });
     setResult({ added: feed.title || host(feed.feed_url) });
     setAddress("");
   };
   const exists = (url) => rss.some((f) => f.url === url);
+  // The UI language's sources first; all of them stay visible.
+  const groups = [lang.value, ...Object.keys(SUGGESTIONS).filter((code) => code !== lang.value)].filter((code) => SUGGESTIONS[code]);
   return html`
     <section class="panel">
       <header><h3>${t("news.add")}</h3></header>
@@ -187,10 +224,18 @@ function AddSource({ rss, onAdd }) {
         <button class="btn primary" type="submit">${t("news.add.find")}</button>
       </form>
       <p class="hint" style=${{ margin: "10px 0 8px" }}>${t("news.add.suggestions")}</p>
-      <div class="suggestions">
-        ${SUGGESTIONS.map(([name, url]) => html`
-          <button class="btn small" disabled=${exists(url)} onClick=${() => check(url)}>${name}</button>`)}
-      </div>
+      ${groups.map((code) => html`
+        <div class="stack" style=${{ gap: "6px", marginBottom: "10px" }}>
+          <span class="hint"><b>${LANGUAGES[code]}</b></span>
+          <div class="suggestions">
+            ${SUGGESTIONS[code].map((s) => html`
+              <button class="btn small" disabled=${exists(s.url)} onClick=${() => check(s.url, s)}
+                title=${s.alert ? t("news.suggest.alert") : s.perDay ? t("news.suggest.busy", { n: s.perDay }) : undefined}>
+                ${s.alert && html`<${Icon} name="siren" size=${14} />`}${s.name}
+              </button>`)}
+          </div>
+          ${code !== "de" && html`<small class="hint">${t(`news.suggest.hint.${code}`)}</small>`}
+        </div>`)}
       ${result && html`<div class="gesture" style=${{ marginTop: "14px" }}>
         ${result.loading && html`<span class="row tight muted"><${Icon} name="loader" size=${15} />${t("news.add.checking", { url: result.url })}</span>`}
         ${result.error && html`<span class="bad-text">${result.error}</span>`}
@@ -198,12 +243,14 @@ function AddSource({ rss, onAdd }) {
         ${result.feed && html`
           <div class="stack" style=${{ gap: "8px" }}>
             <div><b>${result.feed.title || host(result.feed.feed_url)}</b><br /><span class="hint">${result.feed.feed_url}</span></div>
+            ${result.feed.items_per_day != null && html`<span class="hint">${t("news.rate", { n: result.feed.items_per_day })}</span>`}
+            ${!(result.feed.headlines ?? []).length && html`<span class="hint">${t("news.add.quiet")}</span>`}
             <ol class="headlines">${(result.feed.headlines ?? []).map((h) => html`<li>${h}</li>`)}</ol>
             ${(result.feed.discovered ?? []).filter((u) => u !== result.feed.feed_url).length > 0 && html`
               <div class="row tight hint">${t("news.add.more")}
                 ${result.feed.discovered.filter((u) => u !== result.feed.feed_url).map((u) => html`<button class="btn small ghost" onClick=${() => check(u)}>${host(u)}${new URL(u).pathname}</button>`)}
               </div>`}
-            <div><button class="btn primary" disabled=${exists(result.feed.feed_url)} onClick=${() => add(result.feed)}>
+            <div><button class="btn primary" disabled=${exists(result.feed.feed_url)} onClick=${() => add(result.feed, result.preset ?? {})}>
               ${exists(result.feed.feed_url) ? t("news.add.exists") : t("news.add.confirm")}
             </button></div>
           </div>`}
@@ -211,9 +258,15 @@ function AddSource({ rss, onAdd }) {
     </section>`;
 }
 
-function FeedRow({ feed, title, first, last, onChange, onMove, onRemove }) {
+function FeedRow({ feed, title, rate, first, last, onChange, onMove, onRemove }) {
   const [check, setCheck] = useState(null);
+  // Typed text stays as it is; the feed gets the cleaned-up list.
+  const [keywords, setKeywords] = useState((feed.alert_keywords ?? []).join(", "));
   const enabled = feed.show_mode !== "hidden";
+  const perDay = check?.feed?.items_per_day ?? rate;
+  const busy = feed.alert && !(feed.alert_keywords ?? []).length && perDay > BUSY_PER_DAY;
+  const longest = feed.alert ? ALERT_MAX_REFRESH_MINUTES : Infinity;
+  const minutes = Math.min(Math.round(feed.refresh_seconds / 60), longest);
   const test = async () => {
     setCheck({ loading: true });
     try {
@@ -245,8 +298,8 @@ function FeedRow({ feed, title, first, last, onChange, onMove, onRemove }) {
           </select>
         </label>
         <label>${t("news.feed.refresh")}
-          <select value=${Math.round(feed.refresh_seconds / 60)} onChange=${(e) => onChange({ refresh_seconds: Number(e.currentTarget.value) * 60 })}>
-            ${REFRESH_MINUTES.map((m) => html`<option value=${m}>${t("news.minutes", { n: m })}</option>`)}
+          <select value=${minutes} onChange=${(e) => onChange({ refresh_seconds: Number(e.currentTarget.value) * 60 })}>
+            ${[...new Set([...REFRESH_MINUTES.filter((m) => m <= longest), minutes])].sort((a, b) => a - b).map((m) => html`<option value=${m}>${t("news.minutes", { n: m })}</option>`)}
           </select>
         </label>
         <label>${t("news.feed.order")}
@@ -261,9 +314,27 @@ function FeedRow({ feed, title, first, last, onChange, onMove, onRemove }) {
           </select>
         </label>
       </div>
+      <div class="settings alert">
+        <${Switch} label=${t("news.feed.alert")} checked=${!!feed.alert}
+          onChange=${(alert) => onChange(alert && feed.refresh_seconds > ALERT_MAX_REFRESH_MINUTES * 60
+            ? { alert, refresh_seconds: ALERT_MAX_REFRESH_MINUTES * 60 }
+            : { alert })} />
+        ${feed.alert && html`
+          <label class="grow">${t("news.feed.keywords")}
+            <input type="text" value=${keywords} placeholder=${t("news.feed.keywords.placeholder")}
+              onInput=${(e) => {
+                setKeywords(e.currentTarget.value);
+                onChange({ alert_keywords: e.currentTarget.value.split(",").map((k) => k.trim()).filter(Boolean) });
+              }} />
+          </label>`}
+        ${perDay != null && html`<span class="hint">${t("news.rate", { n: perDay })}</span>`}
+        ${feed.alert && html`<small class="hint">${(feed.alert_keywords ?? []).length ? t("news.feed.keywords.hint") : t("news.feed.alert.hint")}</small>`}
+        ${busy && html`<small class="warn-text">${t("news.feed.alert.busy", { n: perDay })}</small>`}
+      </div>
       ${check && html`<div class="settings" style=${{ display: "block" }}>
         ${check.loading && html`<span class="muted">${t("common.loading")}</span>`}
         ${check.error && html`<span class="bad-text">${check.error}</span>`}
+        ${check.feed && !(check.feed.headlines ?? []).length && html`<span class="hint">${t("news.add.quiet")}</span>`}
         ${check.feed && html`<ol class="headlines">${(check.feed.headlines ?? []).map((h) => html`<li>${h}</li>`)}</ol>`}
       </div>`}
     </div>`;

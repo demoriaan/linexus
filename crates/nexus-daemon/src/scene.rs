@@ -57,6 +57,9 @@ pub(crate) struct Scene {
     indicator_since: Option<Instant>,
     overlay: Option<ShownOverlay>,
     queue: VecDeque<(Overlay, Duration)>,
+    /// A breaking-news banner: drawn above every other overlay, which waits
+    /// while it shows.
+    alert: Option<ShownOverlay>,
 }
 
 impl Scene {
@@ -129,6 +132,17 @@ impl Scene {
     }
 
     pub(crate) fn show_overlay(&mut self, overlay: Overlay, duration: Duration, now: Instant) {
+        if self.alert.is_some() {
+            // Volume and track changes are stale once the banner is gone;
+            // everything else waits behind it.
+            if !matches!(overlay, Overlay::Volume(_) | Overlay::NowPlaying(_)) {
+                self.queue.push_back((overlay, duration));
+                while self.queue.len() > MAX_QUEUED {
+                    self.queue.pop_front();
+                }
+            }
+            return;
+        }
         // A newer volume or track overlay replaces one of the same kind in
         // place instead of queueing behind it.
         if let Some(current) = &mut self.overlay {
@@ -223,6 +237,54 @@ impl Scene {
         self.overlay.as_ref().map(|shown| &shown.overlay)
     }
 
+    /// Shows a breaking-news banner right away. A notification or toast on
+    /// screen steps back and comes again in full once the banner is gone; a
+    /// volume or track overlay just ends.
+    pub(crate) fn show_alert(&mut self, overlay: Overlay, duration: Duration, now: Instant) {
+        self.expire(now);
+        if let Some(shown) = self.overlay.take() {
+            let showing = now < shown.shown + shown.duration;
+            if showing
+                && matches!(
+                    shown.overlay,
+                    Overlay::Notification { .. } | Overlay::Toast { .. }
+                )
+            {
+                self.queue
+                    .push_front((shown.overlay, shown.duration.max(UPDATE_MIN)));
+            }
+        }
+        self.alert = Some(ShownOverlay {
+            overlay,
+            shown: now,
+            duration,
+            first_duration: duration,
+        });
+    }
+
+    /// Whether no banner is on screen, sliding out included.
+    pub(crate) fn alert_free(&mut self, now: Instant) -> bool {
+        self.expire(now);
+        self.alert.is_none()
+    }
+
+    /// The banner a touch now lands on.
+    pub(crate) fn alert_at(&self, now: Instant) -> Option<&Overlay> {
+        self.alert
+            .as_ref()
+            .filter(|shown| now < shown.shown + shown.duration)
+            .map(|shown| &shown.overlay)
+    }
+
+    /// Lets the banner slide out now.
+    pub(crate) fn dismiss_alert(&mut self, now: Instant) {
+        if let Some(shown) = &mut self.alert {
+            shown.duration = shown
+                .duration
+                .min(now.saturating_duration_since(shown.shown));
+        }
+    }
+
     /// Hides the overlay on touch. Returns whether the touch is used up:
     /// notifications and media overlays swallow it, while feedback toasts
     /// (answers to the user's own taps) let it through, so quick repeated
@@ -259,6 +321,7 @@ impl Scene {
             || self.snap_back.is_some()
             || self.press.is_some()
             || self.overlay.is_some()
+            || self.alert.is_some()
             || self
                 .indicator_since
                 .is_some_and(|since| now < since + INDICATOR)
@@ -283,11 +346,19 @@ impl Scene {
         {
             self.press = None;
         }
-        if self
-            .overlay
-            .as_ref()
-            .is_some_and(|shown| now >= shown.shown + shown.duration + OVERLAY_SLIDE)
-        {
+        let done = |shown: &Option<ShownOverlay>| {
+            shown
+                .as_ref()
+                .is_some_and(|shown| now >= shown.shown + shown.duration + OVERLAY_SLIDE)
+        };
+        if done(&self.alert) {
+            self.alert = None;
+        }
+        if done(&self.overlay) {
+            self.overlay = None;
+        }
+        // The queue waits while a banner shows.
+        if self.overlay.is_none() && self.alert.is_none() {
             self.overlay = self
                 .queue
                 .pop_front()
@@ -369,7 +440,7 @@ impl Scene {
             render(runtime.page_index, &ui)
         };
 
-        if let Some(shown) = &self.overlay {
+        for shown in [&self.overlay, &self.alert].into_iter().flatten() {
             let elapsed = now.saturating_duration_since(shown.shown);
             let visibility = if elapsed < OVERLAY_SLIDE {
                 elapsed.as_secs_f32() / OVERLAY_SLIDE.as_secs_f32()
@@ -683,5 +754,75 @@ mod tests {
         // After the volume overlay ends, the queued toast takes its place.
         assert!(scene.animating(t + Duration::from_secs(5)));
         assert_eq!(scene.overlay.as_ref().unwrap().overlay, toast);
+    }
+
+    fn banner(title: &str) -> Overlay {
+        Overlay::Alert {
+            source: "Example".into(),
+            headline: title.into(),
+            link: Some("https://example.test/a".into()),
+            id: format!("rss:news:{title}"),
+            marquee: nexus_render::MarqueeStyle::default(),
+        }
+    }
+
+    #[test]
+    fn a_banner_goes_above_notifications_and_they_wait_for_it() {
+        let note = |title: &str| Overlay::Notification {
+            app: "Mail".into(),
+            title: title.into(),
+            body: String::new(),
+            icon: None,
+            link: None,
+            scroll: false,
+        };
+        let volume = Overlay::Volume(nexus_render::VolumeInfo {
+            percent: 40,
+            muted: false,
+        });
+        let six = Duration::from_secs(6);
+        let twenty = Duration::from_secs(20);
+        let ms = Duration::from_millis;
+        let mut scene = Scene::default();
+        let t = Instant::now();
+        scene.show_notification(note("Shown"), six, t, false);
+        // The banner interrupts the notification on screen...
+        scene.show_alert(banner("First"), twenty, t + ms(2000));
+        assert!(scene.overlay().is_none());
+        assert_eq!(scene.alert_at(t + ms(2100)), Some(&banner("First")));
+        // ...and whatever arrives meanwhile waits, except volume changes.
+        scene.show_notification(note("Arrived"), six, t + ms(3000), false);
+        scene.show_overlay(volume, Duration::from_millis(1500), t + ms(3000));
+        assert_eq!(scene.queue.len(), 2);
+        assert!(!scene.alert_free(t + ms(21_000)));
+        assert!(scene.overlay().is_none(), "nothing shows under the banner");
+        // When the banner has slid out, the interrupted notification comes
+        // back in full, then the one that arrived.
+        assert!(scene.alert_free(t + ms(22_000) + OVERLAY_SLIDE));
+        assert_eq!(scene.overlay(), Some(&note("Shown")));
+        assert!(scene.animating(t + ms(22_200) + six + OVERLAY_SLIDE));
+        assert_eq!(scene.overlay(), Some(&note("Arrived")));
+
+        // A touch closes the banner early.
+        let mut scene = Scene::default();
+        scene.show_alert(banner("Second"), twenty, t);
+        scene.dismiss_alert(t + ms(1000));
+        assert!(scene.alert_at(t + ms(1000)).is_none());
+        assert!(!scene.alert_free(t + ms(1000)), "still sliding out");
+        assert!(scene.alert_free(t + ms(1000) + OVERLAY_SLIDE));
+    }
+
+    #[test]
+    fn a_banner_is_drawn_over_the_page() {
+        let runtime = Runtime::from_config(nexus_config::default_config(), None);
+        let live = LiveData::default();
+        let t = Instant::now();
+        let mut scene = Scene::default();
+        let page = scene.compose(&runtime, &live, t);
+        scene.show_alert(banner("Drawn"), Duration::from_secs(20), t);
+        let shown = scene.compose(&runtime, &live, t + Duration::from_secs(1));
+        assert_ne!(page.rgba(), shown.rgba());
+        let gone = scene.compose(&runtime, &live, t + Duration::from_secs(21));
+        assert_eq!(page.rgba(), gone.rgba(), "the page is as it was");
     }
 }

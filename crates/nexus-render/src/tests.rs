@@ -1,6 +1,8 @@
 use super::*;
 use nexus_config::{default_config, template_page, PageTemplate, Theme};
 
+mod ping;
+
 fn ui() -> UiState {
     UiState {
         page_count: 5,
@@ -536,4 +538,102 @@ fn french_is_chosen_and_written_like_french() {
     assert_eq!(format::word(format::Word::Timer, Locale::Fr), "Minuteur");
     assert_eq!(format::word(format::Word::Done, Locale::Fr), "Fini");
     assert_eq!(format::weather(45, true, Locale::Fr).1, "Brouillard");
+}
+
+/// Whether some pixel in the box is clearly the theme's red `critical`.
+fn has_red(canvas: &Canvas, xs: std::ops::Range<usize>, ys: std::ops::Range<usize>) -> bool {
+    ys.flat_map(|y| xs.clone().map(move |x| (x, y)))
+        .any(|(x, y)| {
+            let px = &canvas.rgba()[(y * WIDTH + x) * 4..][..3];
+            px[0] > 180 && u16::from(px[0]) > u16::from(px[1]) + 90 && px[0] > px[2] + 80
+        })
+}
+
+#[test]
+fn breaking_news_banners_render_across_the_strip_in_every_language() {
+    use std::time::Duration;
+    let theme = Theme::default();
+    assert_eq!(
+        format::word(format::Word::Breaking, Locale::De),
+        "Eilmeldung"
+    );
+    assert_eq!(format::word(format::Word::Breaking, Locale::En), "Breaking");
+    assert_eq!(format::word(format::Word::Breaking, Locale::Fr), "Alerte");
+    for locale in [Locale::De, Locale::En, Locale::Fr] {
+        let live = preview::sample_live(locale);
+        let frame = |overlay: &Overlay, shown: Duration| {
+            let mut canvas = Canvas::new();
+            draw_overlay_at(&mut canvas, overlay, &theme, &live, 1.0, shown);
+            canvas
+        };
+        let short = preview::sample_alert(locale, false);
+        let long = preview::sample_alert(locale, true);
+        let (
+            Overlay::Alert {
+                headline: short_text,
+                marquee,
+                ..
+            },
+            Overlay::Alert {
+                headline: long_text,
+                ..
+            },
+        ) = (&short, &long)
+        else {
+            panic!("expected banners");
+        };
+        assert!(alert_scroll_time(short_text, marquee).is_none());
+        let time = alert_scroll_time(long_text, marquee).unwrap();
+        assert!(time > Duration::from_millis(marquee.start_pause_ms + marquee.end_pause_ms));
+
+        let still = frame(&short, Duration::ZERO);
+        let start = frame(&long, Duration::ZERO);
+        let end = frame(&long, time);
+        let name = format!("{locale:?}").to_lowercase();
+        snapshot(&format!("alert-{name}-short"), &still);
+        snapshot(&format!("alert-{name}-long-start"), &start);
+        snapshot(&format!("alert-{name}-long-end"), &end);
+        assert_eq!(still.rgba().len(), WIDTH * HEIGHT * 4);
+        // The critical colour marks the icon, the label and the line along
+        // the whole bottom edge; the rest of the label row is not red.
+        assert!(has_red(&still, 12..42, 8..40), "icon");
+        assert!(has_red(&still, 54..70, 6..18), "label");
+        assert!(has_red(&still, 0..4, 46..48) && has_red(&still, 636..640, 46..48));
+        assert!(!has_red(&still, 160..640, 20..44), "headline in red");
+        // A short headline stands still; a long one waits, scrolls through
+        // once and parks at its end.
+        assert!(still.rgba() == frame(&short, Duration::from_secs(15)).rgba());
+        let waiting = Duration::from_millis(marquee.start_pause_ms);
+        assert!(start.rgba() == frame(&long, waiting).rgba());
+        assert!(start.rgba() != end.rgba());
+        assert!(end.rgba() == frame(&long, time + Duration::from_secs(5)).rgba());
+    }
+}
+
+#[test]
+fn breaking_headlines_are_labelled_in_the_news_widget() {
+    use nexus_config::{NewsProps, Page, Widget, WidgetKind};
+    let page = Page {
+        id: "news".into(),
+        name: "News".into(),
+        hidden: false,
+        auto_return_seconds: None,
+        background: None,
+        widgets: vec![Widget::new(
+            "news",
+            0,
+            640,
+            WidgetKind::News(NewsProps::default()),
+        )],
+    };
+    let mut live = preview::sample_live(Locale::De);
+    let render = |live: &LiveData| render_page(&page, &Theme::default(), live, &ui());
+    let plain = render(&live);
+    assert!(!has_red(&plain, 0..640, 0..48));
+    live.news.rows[0].alert = true;
+    live.news.rows[0].seen = true;
+    let labelled = render(&live);
+    snapshot("news-alert-row", &labelled);
+    assert!(has_red(&labelled, 8..90, 4..20), "label of the top row");
+    assert!(!has_red(&labelled, 0..640, 26..48), "bottom row");
 }

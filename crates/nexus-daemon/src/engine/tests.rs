@@ -32,7 +32,9 @@ fn engine(runtime: Runtime, scratch: &Scratch) -> Engine {
         feedback,
         notifications: crate::notifications::Notifications::off(),
         obs: crate::obs::Obs::off(),
+        ping: crate::ping::Ping::off(),
         discord: crate::discord::Discord::off(),
+        audio: crate::audio::Audio::off(),
         focus: crate::focus::Focus::off(),
         logger,
         state_path: None,
@@ -724,4 +726,133 @@ fn a_calibration_needs_a_strip() {
     );
     assert!(!response.ok);
     assert!(engine.calibration.is_none());
+}
+
+/// An engine whose alert feed first holds `Old` (the baseline) and then
+/// brings `Fresh`, as breaking news, at `t`.
+fn breaking_news_engine(scratch: &Scratch, alerts_on: bool, t: Instant) -> Engine {
+    use crate::alerts::tests::{feed, snapshot};
+    // Taps mark headlines read; keep that out of the user's state.
+    std::env::set_var(
+        "NEXUS_SENSOR_RSS_SEEN_PATH",
+        std::env::temp_dir().join(format!("nexus-daemon-rss-seen-{}.json", std::process::id())),
+    );
+    let mut config = nexus_config::default_config();
+    config.settings.overlays.alerts = alerts_on;
+    let mut engine = engine(Runtime::from_config(config, None), scratch);
+    let unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    engine
+        .metrics
+        .set_snapshot(snapshot(vec![feed(&[("Old", Some(unix))])]));
+    engine.tick(t - ms(100));
+    assert!(engine.scene.alert_at(t).is_none(), "the first fetch fired");
+    engine.metrics.set_snapshot(snapshot(vec![feed(&[
+        ("Fresh", Some(unix)),
+        ("Old", Some(unix)),
+    ])]));
+    engine.tick(t);
+    engine
+}
+
+#[test]
+fn breaking_news_shows_a_banner_that_a_tap_opens() {
+    let scratch = Scratch::new("breaking-tap");
+    let t = Instant::now() + ms(1_000);
+    let mut engine = breaking_news_engine(&scratch, true, t);
+    let Some(Overlay::Alert { headline, link, .. }) = engine.scene.alert_at(t + ms(10)) else {
+        panic!("no banner");
+    };
+    assert_eq!(headline, "Fresh");
+    assert_eq!(link.as_deref(), Some("https://example.test/Fresh"));
+    // A swipe on the banner does not change the page; a tap opens the item
+    // and closes the banner.
+    let page = engine.runtime.page().id.clone();
+    engine.touch_event(TouchPhase::Began, 100, t + ms(100));
+    engine.touch_event(TouchPhase::Moved, 400, t + ms(150));
+    engine.touch_event(TouchPhase::Ended, 500, t + ms(200));
+    assert_eq!(engine.runtime.page().id, page);
+    assert!(engine.scene.alert_at(t + ms(210)).is_some());
+    engine.touch_event(TouchPhase::Began, 300, t + ms(1_000));
+    engine.touch_event(TouchPhase::Ended, 300, t + ms(1_050));
+    assert!(engine.scene.alert_at(t + ms(1_060)).is_none());
+    assert_eq!(engine.runtime.page().id, page);
+    let events = std::fs::read_to_string(scratch.0.join("events.jsonl")).unwrap();
+    assert!(events.contains("breaking_news"));
+    assert!(events.contains("news_opened") && events.contains("https://example.test/Fresh"));
+    // The widget lists it first, labelled, once the banner is gone.
+    let cards = engine.news_cards();
+    assert_eq!(cards[0].title, "Fresh");
+    assert_eq!(
+        cards[0].status.as_deref(),
+        Some(crate::alerts::ALERT_STATUS)
+    );
+}
+
+#[test]
+fn a_banner_touch_whose_release_got_lost_does_not_open_it_later() {
+    let scratch = Scratch::new("breaking-lost-release");
+    let t = Instant::now() + ms(1_000);
+    let mut engine = breaking_news_engine(&scratch, true, t);
+    // The finger goes down on the banner, the release never arrives, and
+    // the banner runs out.
+    engine.touch_event(TouchPhase::Began, 300, t + ms(100));
+    let stay = ms(u64::from(
+        engine.runtime.settings().overlays.alert_duration_ms,
+    ));
+    assert!(engine.scene.alert_at(t + stay + ms(500)).is_none());
+    // The next tap belongs to the page, not to the banner that is gone.
+    let later = t + stay + ms(1_000);
+    engine.touch_event(TouchPhase::Began, 300, later);
+    engine.touch_event(TouchPhase::Ended, 300, later + ms(50));
+    // Past any double-tap wait.
+    engine.tick(later + ms(1_000));
+    let events = std::fs::read_to_string(scratch.0.join("events.jsonl")).unwrap();
+    assert!(
+        !events.contains("tap opened breaking news"),
+        "the old banner opened"
+    );
+}
+
+#[test]
+fn holding_a_banner_closes_it_and_expired_banners_give_the_page_back() {
+    let scratch = Scratch::new("breaking-hold");
+    let t = Instant::now() + ms(1_000);
+    let mut engine = breaking_news_engine(&scratch, true, t);
+    engine.touch_event(TouchPhase::Began, 300, t + ms(100));
+    engine.tick(t + ms(100) + engine.news.hold_threshold() + ms(50));
+    assert!(
+        engine.scene.alert_at(t + ms(1_000)).is_none(),
+        "hold closed it"
+    );
+    engine.touch_event(TouchPhase::Ended, 300, t + ms(1_500));
+    let events = std::fs::read_to_string(scratch.0.join("events.jsonl")).unwrap();
+    assert!(!events.contains("news_opened"));
+
+    // Untouched, it stays for the configured time and then goes.
+    let scratch = Scratch::new("breaking-expire");
+    let engine = breaking_news_engine(&scratch, true, t);
+    let stay = ms(u64::from(
+        engine.runtime.settings().overlays.alert_duration_ms,
+    ));
+    assert!(engine.scene.alert_at(t + stay - ms(10)).is_some());
+    assert!(engine.scene.alert_at(t + stay).is_none());
+}
+
+#[test]
+fn without_banners_breaking_news_only_heads_the_news_widget() {
+    let scratch = Scratch::new("breaking-off");
+    let t = Instant::now() + ms(1_000);
+    let mut engine = breaking_news_engine(&scratch, false, t);
+    engine.tick(t + ms(500));
+    assert!(engine.scene.alert_at(t + ms(600)).is_none());
+    assert!(engine.scene.alert_free(t + ms(600)));
+    let cards = engine.news_cards();
+    assert_eq!(cards[0].title, "Fresh");
+    assert_eq!(
+        cards[0].status.as_deref(),
+        Some(crate::alerts::ALERT_STATUS)
+    );
 }

@@ -16,7 +16,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 /// Samples kept per metric for sparklines (one per second).
-const HISTORY: usize = 60;
+pub(crate) const HISTORY: usize = 60;
 const WEATHER_EVERY: Duration = Duration::from_secs(15 * 60);
 const WEATHER_RETRY: Duration = Duration::from_secs(60);
 const ENTITIES_EVERY: Duration = Duration::from_secs(5);
@@ -34,7 +34,7 @@ pub(crate) fn local_time() -> LocalTime {
     }
 }
 
-fn unit(unit: nexus_sensors::MetricUnit) -> Unit {
+pub(crate) fn unit(unit: nexus_sensors::MetricUnit) -> Unit {
     use nexus_sensors::MetricUnit as M;
     match unit {
         M::Percent => Unit::Percent,
@@ -44,6 +44,7 @@ fn unit(unit: nexus_sensors::MetricUnit) -> Unit {
         M::Bytes => Unit::Bytes,
         M::BytesPerSec => Unit::BytesPerSec,
         M::Megahertz => Unit::Megahertz,
+        M::Milliseconds => Unit::Milliseconds,
         M::Plain => Unit::Plain,
     }
 }
@@ -459,10 +460,15 @@ fn run_worker(shared: &Shared) {
 
 /// The metric catalog for the API. Read from the collector rather than from
 /// rendered frames, so it is complete while the strip is off.
-pub(crate) fn metric_readings(snapshot: &MetricsSnapshot) -> Vec<nexus_ipc::MetricReading> {
+/// The catalog's readings and `extra` ones (such as ping), sorted by id.
+pub(crate) fn metric_readings(
+    snapshot: &MetricsSnapshot,
+    extra: &[nexus_sensors::MetricReading],
+) -> Vec<nexus_ipc::MetricReading> {
     let mut readings: Vec<_> = snapshot
         .catalog
         .iter()
+        .chain(extra)
         .map(|reading| nexus_ipc::MetricReading {
             id: reading.id.clone(),
             label: reading.label.clone(),

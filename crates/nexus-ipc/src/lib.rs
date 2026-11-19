@@ -112,7 +112,7 @@ pub struct MetricReading {
     pub label: String,
     pub value: f32,
     /// `percent`, `celsius`, `watts`, `rpm`, `bytes`, `bytes_per_sec`,
-    /// `megahertz` or `plain`.
+    /// `megahertz`, `milliseconds` or `plain`.
     pub unit: String,
     pub max: f32,
 }

@@ -529,6 +529,10 @@
   .feed .settings { grid-column: 2 / -1; display: flex; gap: 10px; flex-wrap: wrap; }
   .feed .settings label { display: grid; gap: 4px; font-size: 12px; color: var(--text-3); }
   .feed .settings select { height: 30px; width: auto; }
+  .feed .settings.alert { align-items: center; }
+  .feed .settings.alert .switch { display: inline-flex; font-size: 13px; color: var(--text-2); }
+  .feed .settings.alert label.grow { min-width: 220px; }
+  .feed .settings.alert small { flex-basis: 100%; }
   .headlines { margin: 0; padding-left: 18px; color: var(--text-2); }
   .suggestions { display: flex; gap: 6px; flex-wrap: wrap; }
 

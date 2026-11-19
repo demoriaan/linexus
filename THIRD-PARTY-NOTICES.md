@@ -167,6 +167,7 @@ Cargo fetches these crates at build time and links them into the binaries. The t
 | thiserror-impl | 2.0.18 | MIT OR Apache-2.0 |
 | tiny-skia | 0.12.0 | BSD-3-Clause |
 | tiny-skia-path | 0.12.0 | BSD-3-Clause |
+| tinyvec | 1.13.3 | Zlib OR Apache-2.0 OR MIT |
 | tokio | 1.52.3 | MIT |
 | tokio-macros | 2.7.0 | MIT |
 | tokio-rustls | 0.26.4 | MIT OR Apache-2.0 |
@@ -177,6 +178,7 @@ Cargo fetches these crates at build time and links them into the binaries. The t
 | typenum | 1.20.1 | MIT OR Apache-2.0 |
 | udev | 0.9.3 | MIT |
 | unicode-ident | 1.0.24 | (MIT OR Apache-2.0) AND Unicode-3.0 |
+| unicode-normalization | 0.1.26 | (MIT OR Apache-2.0) AND Unicode-3.0 |
 | untrusted | 0.9.0 | ISC |
 | usvg | 0.48.1 | Apache-2.0 OR MIT |
 | utf8parse | 0.2.2 | Apache-2.0 OR MIT |

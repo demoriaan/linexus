@@ -16,8 +16,9 @@ pub use live::*;
 pub use text::{FontFace, TextStyle};
 pub use theme::{Palette, PRESETS};
 pub use widgets::{
-    discord_call_hit, discord_channel_at, media_zone, news, volume_fraction_at, weather_key,
-    CallHit, MediaZone,
+    discord_call_hit, discord_channel_at, lit_segments, media_zone, mixer_apps, news, ping_key,
+    privacy_hit, privacy_pill, segment_color, sound_hit, sound_pages, volume_fraction_at,
+    weather_key, CallHit, MediaZone, PrivacyHit, Slider, SoundHit, SEGMENTS,
 };
 
 use nexus_config::{HexColor, ImageFit, Page, Theme};
@@ -95,8 +96,16 @@ pub fn render_page(page: &Page, theme: &Theme, live: &LiveData, ui: &UiState) ->
     for widget in &page.widgets {
         widgets::draw(&mut canvas, widget, &ctx);
     }
-    if let Some(discord) = live.discord.as_ref().filter(|d| d.mic_badge) {
+    let mic_badge = live.discord.as_ref().filter(|d| d.mic_badge);
+    if let Some(discord) = mic_badge {
         draw_mic_badge(&mut canvas, discord);
+    }
+    if let Some(privacy) = &live.privacy {
+        if privacy.open && !privacy.uses.is_empty() {
+            widgets::privacy::draw_list(&mut canvas, privacy, &palette, live.locale);
+        } else {
+            widgets::privacy::draw_pill(&mut canvas, privacy, mic_badge.is_some(), &palette);
+        }
     }
     draw_page_indicator(&mut canvas, ui, &palette);
     canvas
@@ -267,6 +276,21 @@ pub fn notification_scroll_time(body: &str) -> Option<std::time::Duration> {
     })
 }
 
+fn alert_headline_style(color: Rgb) -> TextStyle {
+    TextStyle::new(FontFace::SemiBold, 17.0, color)
+}
+
+/// How long a breaking-news banner needs for its headline to scroll through
+/// once (the news widget's marquee). None when the headline fits.
+pub fn alert_scroll_time(headline: &str, marquee: &MarqueeStyle) -> Option<std::time::Duration> {
+    let style = alert_headline_style(Rgb::default());
+    let text_w = text::measure(&text::printable(headline, style.face), &style).ceil() as u32;
+    let viewport = BODY_W as u32;
+    (text_w > viewport).then(|| {
+        std::time::Duration::from_millis(widgets::news::marquee_run_ms(text_w, viewport, marquee))
+    })
+}
+
 /// Draws a transient overlay. `visibility` (0..=1) drives a slide-in from
 /// the top edge.
 pub fn draw_overlay(
@@ -304,13 +328,47 @@ pub fn draw_overlay_at(
     let offset = (1.0 - t) * -(HEIGHT as f32);
     let panel = Bounds::new(0.0, offset, WIDTH as f32, HEIGHT as f32);
     canvas.vertical_gradient(panel, palette.bg_top, palette.bg_bottom);
+    let accent = match overlay {
+        Overlay::Alert { .. } => palette.critical,
+        _ => palette.accent,
+    };
     canvas.fill(
         Bounds::new(0.0, offset + HEIGHT as f32 - 2.0, WIDTH as f32, 2.0),
-        palette.accent,
+        accent,
         0.9,
     );
     let y = offset;
     match overlay {
+        Overlay::Alert {
+            source,
+            headline,
+            marquee,
+            ..
+        } => {
+            canvas.icon("siren", 15.0, y + 11.0, 24.0, accent, 1.0);
+            let caption = TextStyle::new(FontFace::SemiBold, 11.0, accent).tracking(0.6);
+            let label = format::word(format::Word::Breaking, live.locale).to_uppercase();
+            let label_w = canvas.text(BODY_X, y + 16.0, &label, &caption);
+            let source_style = TextStyle {
+                color: palette.text_dim,
+                ..caption
+            };
+            canvas.text_fit(
+                BODY_X + label_w + 10.0,
+                y + 16.0,
+                &text::printable(&source.to_uppercase(), source_style.face),
+                &source_style,
+                BODY_W - label_w - 10.0,
+            );
+            let style = alert_headline_style(palette.text);
+            let line = text::printable(headline, style.face);
+            let text_w = text::measure(&line, &style).ceil() as u32;
+            let phase = shown.as_millis() as u64;
+            let scrolled = widgets::news::marquee_offset(text_w, BODY_W as u32, phase, marquee);
+            let clip = canvas.clip_x(BODY_X, BODY_X + BODY_W);
+            canvas.text(BODY_X - scrolled as f32, y + 38.0, &line, &style);
+            canvas.set_clip(clip);
+        }
         Overlay::Notification {
             app,
             title,
@@ -492,5 +550,7 @@ pub fn border_grid_frame() -> Vec<u8> {
     canvas.into_rgba()
 }
 
+#[cfg(test)]
+mod sound_tests;
 #[cfg(test)]
 mod tests;

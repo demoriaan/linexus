@@ -495,6 +495,50 @@ fn home_assistant_tiles_are_in_the_review() {
 }
 
 #[test]
+fn ping_widgets_and_readings_are_in_the_review() {
+    let mut config = config_with_outside_actions();
+    config.settings.ping.host = "router.lan".into();
+    let ping = |id: &str, host: Option<&str>| {
+        Widget::new(
+            id,
+            0,
+            100,
+            WidgetKind::Ping(nexus_config::PingProps {
+                host: host.map(Into::into),
+                ..Default::default()
+            }),
+        )
+    };
+    let reading = Widget::new(
+        "corner",
+        0,
+        100,
+        WidgetKind::Metric(nexus_config::MetricProps {
+            secondary: Some("net.ping.loss".into()),
+            ..Default::default()
+        }),
+    );
+    config.profiles[0].pages[0].widgets = vec![
+        ping("own", Some("203.0.113.9")),
+        ping("default", None),
+        reading,
+    ];
+    let lines: Vec<(String, String, Option<&str>)> = outside_reach(&config)
+        .into_iter()
+        .filter(|item| item.kind == ReachKind::Ping)
+        .map(|item| (item.widget, item.detail, item.gesture))
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            ("own".to_string(), "ping 203.0.113.9".to_string(), None),
+            ("default".to_string(), "ping router.lan".to_string(), None),
+            ("corner".to_string(), "ping router.lan".to_string(), None),
+        ]
+    );
+}
+
+#[test]
 fn review_text_cannot_hide_or_fake_lines() {
     let mut config = config_with_outside_actions();
     config.profiles[0].name = "Desk\u{1b}[1A\u{1b}[2K\u{202e}".into();

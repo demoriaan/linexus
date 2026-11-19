@@ -307,6 +307,7 @@ fn format_reading(value: f32, unit: &str) -> (String, String) {
         "watts" => (format!("{value:.0}"), "W".into()),
         "rpm" => (format!("{value:.0}"), "rpm".into()),
         "megahertz" => (format!("{value:.0}"), "MHz".into()),
+        "milliseconds" => (nexus_render::format::milliseconds(value), "ms".into()),
         "bytes" => scale_bytes(value, ""),
         "bytes_per_sec" => scale_bytes(value, "/s"),
         "plain" | "" => (trim_number(value), String::new()),
@@ -369,6 +370,10 @@ mod tests {
         );
         assert_eq!(format_reading(512.0, "bytes"), ("512".into(), "B".into()));
         assert_eq!(format_reading(3.0, "plain"), ("3".into(), String::new()));
+        assert_eq!(
+            format_reading(4.26, "milliseconds"),
+            ("4.3".into(), "ms".into())
+        );
     }
 
     #[test]

@@ -1,17 +1,18 @@
 //! Feed inspection for the Studio "add feed" flow: download an address, accept
-//! it when it is an RSS/Atom feed, otherwise look for feeds the page links via
-//! `<link rel="alternate">`, and report title plus the latest headlines.
+//! it when it is an RSS/Atom feed (or the tagesschau API), otherwise look for
+//! feeds the page links via `<link rel="alternate">`, and report title, the
+//! latest headlines and about how many items the feed brings a day.
 
 use super::{
-    fetch_document, parse_rss_channel, rss_cache_path, sanitize_sensor_id, xml_unescape,
-    RssChannel, RssFeedConfig,
+    alerts::ALERT_SCAN, fetch_document, formats, parse_feed_body, rss_cache_path,
+    sanitize_sensor_id, unix_now_secs, xml_unescape, FeedFormat, RssChannel, RssFeedConfig,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fs;
 use std::time::Duration;
 
-const INSPECT_TIMEOUT: Duration = Duration::from_secs(8);
+const INSPECT_TIMEOUT: Duration = Duration::from_secs(15);
 const INSPECT_HEADLINES: usize = 5;
 /// Pages sometimes link a dozen feeds (per category, comments, podcasts);
 /// the first few are the main ones.
@@ -26,6 +27,10 @@ pub struct FeedInspection {
     pub headlines: Vec<String>,
     /// Feed links found when `url` was a web page rather than a feed.
     pub discovered: Vec<String>,
+    pub format: FeedFormat,
+    /// About how many items a day, from the item dates; None when the feed
+    /// dates too few of them.
+    pub items_per_day: Option<u32>,
 }
 
 /// Downloads `url` and describes the feed behind it, or explains in plain
@@ -35,8 +40,8 @@ pub fn inspect_feed_url(url: &str) -> Result<FeedInspection, String> {
         .ok_or("Enter an address starting with http:// or https://.")?;
     let (body, page_url) = fetch_document(&url, INSPECT_TIMEOUT)
         .ok_or_else(|| format!("Could not download {url}."))?;
-    if let Some(channel) = parse_feed(&body) {
-        return Ok(describe(&url, channel, Vec::new()));
+    if let Some((format, channel)) = parse_feed(&body) {
+        return Ok(describe(&url, format, channel, Vec::new()));
     }
     let discovered = discover_feed_links(&body, &page_url);
     if discovered.is_empty() {
@@ -50,8 +55,8 @@ pub fn inspect_feed_url(url: &str) -> Result<FeedInspection, String> {
         let Some((body, _)) = fetch_document(candidate, INSPECT_TIMEOUT) else {
             continue;
         };
-        if let Some(channel) = parse_feed(&body) {
-            return Ok(describe(candidate, channel, discovered.clone()));
+        if let Some((format, channel)) = parse_feed(&body) {
+            return Ok(describe(candidate, format, channel, discovered.clone()));
         }
     }
     Err("The page links feeds, but none of them could be read.".into())
@@ -63,22 +68,53 @@ pub fn cached_feed_titles(feeds: &[RssFeedConfig]) -> BTreeMap<String, String> {
     feeds
         .iter()
         .filter_map(|feed| {
-            let text = fs::read_to_string(rss_cache_path(feed)).ok()?;
-            let value = serde_json::from_str::<serde_json::Value>(&text).ok()?;
-            let body = value.get("body")?.as_str()?;
-            let title = parse_rss_channel(body, 0)?.title?;
+            let title = parse_feed_body(feed.format, &cached_body(feed)?, 0)?.title?;
             Some((feed.id.clone(), title))
         })
         .collect()
 }
 
-/// A feed only counts when it has entries: the RSS parser also accepts an
-/// HTML page's `<title>` as a channel title.
-fn parse_feed(body: &str) -> Option<RssChannel> {
-    parse_rss_channel(body, INSPECT_HEADLINES).filter(|channel| !channel.items.is_empty())
+/// About how many items a day each feed brought lately, from its cached
+/// download, keyed by feed id (see [`formats::items_per_day`]).
+pub fn cached_feed_rates(feeds: &[RssFeedConfig]) -> BTreeMap<String, u32> {
+    let now = unix_now_secs();
+    feeds
+        .iter()
+        .filter_map(|feed| {
+            let channel = parse_feed_body(feed.format, &cached_body(feed)?, ALERT_SCAN)?;
+            Some((feed.id.clone(), rate(&channel, now)?))
+        })
+        .collect()
 }
 
-fn describe(url: &str, channel: RssChannel, discovered: Vec<String>) -> FeedInspection {
+fn cached_body(feed: &RssFeedConfig) -> Option<String> {
+    let text = fs::read_to_string(rss_cache_path(feed)).ok()?;
+    let value = serde_json::from_str::<serde_json::Value>(&text).ok()?;
+    Some(value.get("body")?.as_str()?.to_owned())
+}
+
+fn rate(channel: &RssChannel, now: u64) -> Option<u32> {
+    let dates: Vec<u64> = channel.items.iter().filter_map(|i| i.published).collect();
+    formats::items_per_day(&dates, now).map(|per_day| per_day.round() as u32)
+}
+
+/// The feed in `body`, the way the collector will read it: a feed document
+/// counts without items too (a breaking-news feed is empty on a quiet day,
+/// and so is the tagesschau API when it marks nothing as breaking news), an
+/// HTML page only when it holds feed items.
+fn parse_feed(body: &str) -> Option<(FeedFormat, RssChannel)> {
+    [FeedFormat::Tagesschau, FeedFormat::Rss]
+        .into_iter()
+        .find_map(|format| Some((format, parse_feed_body(format, body, ALERT_SCAN)?)))
+}
+
+fn describe(
+    url: &str,
+    format: FeedFormat,
+    channel: RssChannel,
+    discovered: Vec<String>,
+) -> FeedInspection {
+    let items_per_day = rate(&channel, unix_now_secs());
     let title = channel
         .title
         .map(|title| title.trim().to_string())
@@ -94,8 +130,11 @@ fn describe(url: &str, channel: RssChannel, discovered: Vec<String>) -> FeedInsp
             .filter_map(|item| item.title)
             .map(|title| title.trim().to_string())
             .filter(|title| !title.is_empty())
+            .take(INSPECT_HEADLINES)
             .collect(),
         discovered,
+        format,
+        items_per_day,
     }
 }
 
@@ -352,11 +391,94 @@ mod tests {
         assert!(parse_feed("<html><head><title>Startseite</title></head></html>").is_none());
         let rss =
             "<rss><channel><title>News</title><item><title>Eins</title></item></channel></rss>";
-        let channel = parse_feed(rss).unwrap();
-        let inspection = describe("https://www.example.com/rss", channel, Vec::new());
+        let (format, channel) = parse_feed(rss).unwrap();
+        assert_eq!(format, FeedFormat::Rss);
+        let inspection = describe("https://www.example.com/rss", format, channel, Vec::new());
         assert_eq!(inspection.title.as_deref(), Some("News"));
         assert_eq!(inspection.suggested_id, "example");
         assert_eq!(inspection.headlines, vec!["Eins".to_string()]);
+        assert_eq!(inspection.items_per_day, None);
+    }
+
+    #[test]
+    fn a_breaking_news_feed_without_items_is_still_a_feed() {
+        // How a breaking-news feed looks while nothing is breaking: a
+        // channel with a title and a self link, no items.
+        let quiet = r#"<?xml version="1.0" encoding="UTF-8"?>
+            <rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0"><channel>
+            <title>Beispiel – Eilmeldungen</title>
+            <link>https://www.example.test/</link>
+            <atom:link href="https://www.example.test/eil/index.rss" rel="self" type="application/rss+xml"/>
+            </channel></rss>"#;
+        let (format, channel) = parse_feed(quiet).unwrap();
+        assert_eq!(format, FeedFormat::Rss);
+        let inspection = describe(
+            "https://www.example.test/eil/index.rss",
+            format,
+            channel,
+            Vec::new(),
+        );
+        assert_eq!(inspection.title.as_deref(), Some("Beispiel – Eilmeldungen"));
+        assert!(inspection.headlines.is_empty());
+        let atom = r#"<feed xmlns="http://www.w3.org/2005/Atom"><title>Leer</title></feed>"#;
+        assert_eq!(parse_feed(atom).map(|(_, c)| c.items.len()), Some(0));
+        // A page that only links a feed is still not one.
+        assert!(parse_feed(
+            r#"<html><head><link rel="alternate" type="application/rss+xml" href="/x.rss"></head></html>"#
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn inspection_estimates_items_a_day_and_knows_the_tagesschau_api() {
+        let now = unix_now_secs();
+        let items: String = (0..12)
+            .map(|i| {
+                let at = now - i * 2 * 3600;
+                format!(
+                    "<item><title>Meldung {i}</title><updated>{}</updated></item>",
+                    iso(at)
+                )
+            })
+            .collect();
+        let rss = format!("<rss><channel><title>Busy</title>{items}</channel></rss>");
+        let (format, channel) = parse_feed(&rss).unwrap();
+        let inspection = describe("https://www.example.com/rss", format, channel, Vec::new());
+        assert_eq!(inspection.headlines.len(), INSPECT_HEADLINES);
+        assert_eq!(inspection.items_per_day, Some(12));
+
+        let api = r#"{"news": [{"title": "Ruhig", "breakingNews": false}]}"#;
+        let (format, channel) = parse_feed(api).unwrap();
+        assert_eq!(format, FeedFormat::Tagesschau);
+        let inspection = describe(
+            "https://www.tagesschau.de/api2u/homepage/",
+            format,
+            channel,
+            Vec::new(),
+        );
+        assert_eq!(inspection.suggested_id, "tagesschau");
+        assert!(inspection.headlines.is_empty());
+    }
+
+    /// `at` as ISO 8601 in UTC.
+    fn iso(at: u64) -> String {
+        let (days, secs) = (at / 86_400, at % 86_400);
+        // Civil date from days since 1970 (Howard Hinnant's algorithm).
+        let z = days as i64 + 719_468;
+        let era = z.div_euclid(146_097);
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let day = doy - (153 * mp + 2) / 5 + 1;
+        let month = if mp < 10 { mp + 3 } else { mp - 9 };
+        let year = yoe + era * 400 + i64::from(month <= 2);
+        format!(
+            "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+            secs / 3600,
+            secs / 60 % 60,
+            secs % 60
+        )
     }
 
     #[test]

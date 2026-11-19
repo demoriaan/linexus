@@ -117,6 +117,7 @@ fn config() -> Response {
         "ok": true,
         "path": sensor_config_path(),
         "feed_titles": nexus_sensors::cached_feed_titles(&config.rss),
+        "feed_rates": nexus_sensors::cached_feed_rates(&config.rss),
         "config": public_config(&config),
         "webhook_records": nexus_sensors::list_webhook_records(),
         "rss_seen_count": nexus_sensors::load_rss_seen_state().seen.len(),

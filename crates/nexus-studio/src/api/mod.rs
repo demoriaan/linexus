@@ -1,6 +1,7 @@
 //! Request dispatch: security gates first, then the `/api` routes of each
 //! area, then static files.
 
+pub mod audio;
 pub mod catalog;
 pub mod config;
 pub mod daemon;
@@ -60,6 +61,7 @@ fn route_api(request: &Request, state: &AppState) -> Option<Response> {
         .or_else(|| preview::route(request, state))
         .or_else(|| daemon::route(request, state))
         .or_else(|| catalog::route(request, state))
+        .or_else(|| audio::route(request))
         .or_else(|| obs::route(request))
         .or_else(|| discord::route(request))
         .or_else(|| sensors::route(request))

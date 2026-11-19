@@ -5,7 +5,8 @@
 //! with the user's rights as soon as a button is tapped: they run programs,
 //! type into the focused window (a line break presses Enter, so text typed
 //! into a terminal runs as a command), send web requests, open things,
-//! start an OBS stream or switch Home Assistant devices.
+//! start an OBS stream or switch Home Assistant devices. Ping widgets and
+//! readings are listed too: they send packets to a host the pack names.
 
 use crate::{load_checked, profile_summary, PackProfileSummary};
 use anyhow::Result;
@@ -34,6 +35,7 @@ pub enum ReachKind {
     OpenPath,
     OpenUrl,
     HomeAssistant,
+    Ping,
 }
 
 impl ReachKind {
@@ -53,6 +55,7 @@ impl ReachKind {
             Self::OpenPath => "Open files and folders",
             Self::OpenUrl => "Open web pages",
             Self::HomeAssistant => "Control Home Assistant devices",
+            Self::Ping => "Ping hosts on the network to measure the connection",
         }
     }
 }
@@ -126,6 +129,10 @@ pub fn outside_reach(config: &NexusConfig) -> Vec<Reach> {
                         false,
                         detail.to_string(),
                     ));
+                }
+                // Shown while the profile is active, it pings on its own.
+                if let Some(host) = widget.ping_host(&config.settings.ping) {
+                    found.push(at(ReachKind::Ping, None, false, format!("ping {host}")));
                 }
                 let gestures = [
                     ("tap", &widget.tap),
@@ -210,6 +217,7 @@ fn visit(action: &ActionSpec, in_sequence: bool, emit: &mut impl FnMut(ReachKind
         ActionSpec::Media { .. }
         | ActionSpec::Volume { .. }
         | ActionSpec::MicrophoneMute
+        | ActionSpec::AudioOutput { .. }
         | ActionSpec::NextPage
         | ActionSpec::PreviousPage
         | ActionSpec::GoToPage { .. }

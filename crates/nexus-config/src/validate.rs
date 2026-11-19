@@ -1,3 +1,4 @@
+use crate::audio::*;
 use crate::model::*;
 use std::collections::HashSet;
 
@@ -7,6 +8,8 @@ pub const MAX_IMAGE_DATA_URL_BYTES: usize = 3 * 1024 * 1024;
 pub const MAX_SEQUENCE_DELAY_MS: u32 = 60_000;
 /// Most steps one sequence may run.
 pub const MAX_SEQUENCE_STEPS: usize = 16;
+/// PipeWire node names run longer than the names people give devices.
+const MAX_NODE_NAME_CHARS: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ConfigError {
@@ -78,10 +81,32 @@ pub enum ConfigError {
     InvalidAutoReturn { page: String },
     #[error("idle dimming to {dim_percent}% is above 100%")]
     InvalidIdleDim { dim_percent: u8 },
+    #[error(
+        "breaking-news banners stay {duration_ms} ms; allowed are {} to {} ms",
+        ALERT_DURATION_MS.start(),
+        ALERT_DURATION_MS.end()
+    )]
+    InvalidAlertDuration { duration_ms: u32 },
     #[error("page '{page}' background dim {dim_percent}% is above 90%")]
     InvalidBackgroundDim { page: String, dim_percent: u8 },
     #[error("image on page '{page}' is not a base64 data URL below 3 MiB")]
     InvalidImage { page: String },
+    #[error("settings.ping.host is not a host name or IP address")]
+    InvalidDefaultPingHost,
+    #[error("ping interval {interval_ms} ms is out of range ({MIN_PING_INTERVAL_MS} to {MAX_PING_INTERVAL_MS} ms)")]
+    InvalidPingInterval { interval_ms: u32 },
+    #[error("widget '{widget}' pings something that is not a host name or IP address")]
+    InvalidPingHost { widget: String },
+    #[error("widget '{widget}' turns amber at {warn_ms} ms and red at {critical_ms} ms; both must be 1 to {MAX_PING_THRESHOLD_MS} ms, amber below red")]
+    InvalidPingThresholds {
+        widget: String,
+        warn_ms: u32,
+        critical_ms: u32,
+    },
+    #[error("audio device '{node}' is listed twice, has an empty or overlong name, or the list is longer than {MAX_AUDIO_DEVICES}")]
+    InvalidAudioDevice { node: String },
+    #[error("widget '{widget}' names an empty or overlong sound device or app, or more than {MAX_AUDIO_LIST}")]
+    InvalidAudioList { widget: String },
 }
 
 pub type Result<T> = std::result::Result<T, ConfigError>;
@@ -101,11 +126,25 @@ pub fn validate(config: &NexusConfig) -> Result<()> {
             right: touch.right,
         });
     }
+    let ping = &config.settings.ping;
+    if !is_valid_host(&ping.host) {
+        return Err(ConfigError::InvalidDefaultPingHost);
+    }
+    if !(MIN_PING_INTERVAL_MS..=MAX_PING_INTERVAL_MS).contains(&ping.interval_ms) {
+        return Err(ConfigError::InvalidPingInterval {
+            interval_ms: ping.interval_ms,
+        });
+    }
     if config.settings.idle.dim_percent > 100 {
         return Err(ConfigError::InvalidIdleDim {
             dim_percent: config.settings.idle.dim_percent,
         });
     }
+    let duration_ms = config.settings.overlays.alert_duration_ms;
+    if !ALERT_DURATION_MS.contains(&duration_ms) {
+        return Err(ConfigError::InvalidAlertDuration { duration_ms });
+    }
+    validate_audio(&config.settings.audio)?;
     let mut profile_ids = HashSet::new();
     for profile in &config.profiles {
         if profile.id.trim().is_empty() {
@@ -204,6 +243,8 @@ fn validate_page(page: &Page, profile_ids: &HashSet<&str>, page_ids: &HashSet<&s
                 icon: Some(icon), ..
             }) if icon.starts_with("data:") => check_image(page, icon)?,
             WidgetKind::Command(props) => check_program(&widget.id, &props.program)?,
+            WidgetKind::Ping(props) => check_ping(&widget.id, props)?,
+            WidgetKind::Mixer(props) => check_audio_list(&widget.id, &props.pinned)?,
             WidgetKind::DiscordVoice(props)
                 if props
                     .guild_id
@@ -258,6 +299,65 @@ fn check_program(widget: &str, program: &str) -> Result<()> {
     Ok(())
 }
 
+fn check_ping(widget: &str, props: &PingProps) -> Result<()> {
+    if props
+        .host
+        .as_deref()
+        .is_some_and(|host| !is_valid_host(host))
+    {
+        return Err(ConfigError::InvalidPingHost {
+            widget: widget.to_string(),
+        });
+    }
+    let threshold = 1..=MAX_PING_THRESHOLD_MS;
+    if !threshold.contains(&props.warn_ms)
+        || !threshold.contains(&props.critical_ms)
+        || props.warn_ms >= props.critical_ms
+    {
+        return Err(ConfigError::InvalidPingThresholds {
+            widget: widget.to_string(),
+            warn_ms: props.warn_ms,
+            critical_ms: props.critical_ms,
+        });
+    }
+    Ok(())
+}
+
+/// An IP address to ping or a host name: dot-separated labels of letters,
+/// digits and inner hyphens, at most 253 characters, optionally with a
+/// final dot. A name ending in a number is refused, since resolvers would
+/// read `1.2.3` as an address. Addresses that a probe cannot reach are
+/// refused: unspecified, multicast, broadcast, and IPv6 link-local ones,
+/// which would need an interface. IPv4-mapped IPv6 addresses count as the
+/// IPv4 address they carry.
+pub fn is_valid_host(host: &str) -> bool {
+    if let Ok(addr) = host.parse::<std::net::IpAddr>() {
+        let addr = addr.to_canonical();
+        let link_local = matches!(addr, std::net::IpAddr::V6(v6) if v6.is_unicast_link_local());
+        return !addr.is_unspecified()
+            && !addr.is_multicast()
+            && !link_local
+            && addr != std::net::IpAddr::from(std::net::Ipv4Addr::BROADCAST);
+    }
+    let name = host.strip_suffix('.').unwrap_or(host);
+    if name.is_empty() || host.len() > 253 {
+        return false;
+    }
+    let label_ok = |label: &str| {
+        (1..=63).contains(&label.len())
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+    };
+    name.split('.').all(label_ok)
+        && !name
+            .rsplit('.')
+            .next()
+            .is_some_and(|last| last.bytes().all(|b| b.is_ascii_digit()))
+}
+
 fn validate_action(
     widget: &str,
     action: &ActionSpec,
@@ -307,6 +407,7 @@ fn validate_action(
             percent: *percent,
         }),
         ActionSpec::ShellCommand { program, .. } => check_program(widget, program),
+        ActionSpec::AudioOutput { devices } => check_audio_list(widget, devices),
         ActionSpec::HttpRequest { url, .. }
             if !(url.starts_with("http://") || url.starts_with("https://")) =>
         {
@@ -360,6 +461,45 @@ fn validate_action(
         }
         _ => Ok(()),
     }
+}
+
+fn validate_audio(audio: &AudioSettings) -> Result<()> {
+    let mut nodes = HashSet::new();
+    for device in &audio.devices {
+        let bad_name = device
+            .name
+            .as_deref()
+            .is_some_and(|name| name.trim().is_empty() || too_long(name, MAX_AUDIO_NAME_CHARS));
+        if device.node.trim().is_empty()
+            || too_long(&device.node, MAX_NODE_NAME_CHARS)
+            || bad_name
+            || !nodes.insert(device.node.as_str())
+            || nodes.len() > MAX_AUDIO_DEVICES
+        {
+            return Err(ConfigError::InvalidAudioDevice {
+                node: device.node.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Device or app names of a widget: a few, none empty.
+fn check_audio_list(widget: &str, names: &[String]) -> Result<()> {
+    if names.len() > MAX_AUDIO_LIST
+        || names
+            .iter()
+            .any(|name| name.trim().is_empty() || too_long(name, MAX_NODE_NAME_CHARS))
+    {
+        return Err(ConfigError::InvalidAudioList {
+            widget: widget.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn too_long(name: &str, chars: usize) -> bool {
+    name.chars().count() > chars
 }
 
 /// A Discord id: a number of up to 20 digits.

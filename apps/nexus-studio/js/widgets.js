@@ -3,7 +3,7 @@ import { metricsCatalog } from "./lib/store.js";
 // What Studio knows about each widget type: how it looks in the library,
 // its default size and props, and which fields the inspector shows.
 // Field kinds: text, number, select, toggle, icon, metric, location, entity,
-// feeds, image, args, discord_guild.
+// feeds, image, args, discord_guild, ping_host, pinned_apps.
 
 export const WIDGETS = {
   clock: {
@@ -31,6 +31,16 @@ export const WIDGETS = {
     ],
   },
   network: { icon: "arrow-left-right", w: 134, props: {}, fields: [{ key: "interface", kind: "text", optional: true }] },
+  ping: {
+    icon: "radar",
+    w: 200,
+    props: { warn_ms: 60, critical_ms: 120 },
+    fields: [
+      { key: "host", kind: "ping_host", optional: true },
+      { key: "warn_ms", kind: "number", min: 1, max: 10000 },
+      { key: "critical_ms", kind: "number", min: 1, max: 10000 },
+    ],
+  },
   media: {
     icon: "music",
     w: 480,
@@ -50,6 +60,27 @@ export const WIDGETS = {
     fields: [
       { key: "source", kind: "select", options: ["system", "discord_input", "discord_output"] },
       { key: "show_value", kind: "toggle" },
+    ],
+  },
+  audio_output: {
+    icon: "speaker",
+    w: 640,
+    props: { show_volume: true },
+    fields: [{ key: "show_volume", kind: "toggle" }],
+  },
+  mixer: {
+    icon: "sliders-horizontal",
+    w: 640,
+    props: {},
+    fields: [{ key: "pinned", kind: "pinned_apps" }],
+  },
+  microphone: {
+    icon: "mic",
+    w: 640,
+    props: { show_level: true, show_volume: true },
+    fields: [
+      { key: "show_level", kind: "toggle" },
+      { key: "show_volume", kind: "toggle" },
     ],
   },
   button: {
@@ -159,7 +190,8 @@ export const WIDGETS = {
 };
 
 export const WIDGET_ORDER = [
-  "button", "clock", "metric", "network", "media", "volume", "news",
+  "button", "clock", "metric", "network", "ping", "media", "volume", "news",
+  "audio_output", "mixer", "microphone",
   "weather", "entity", "timer", "discord_voice", "discord_call", "text", "image", "command", "spacer",
 ];
 
@@ -172,6 +204,9 @@ export const BUILTIN = {
   entity: { tap: "builtin.entity.tap" },
   discord_voice: { tap: "builtin.discord_voice.tap" },
   discord_call: { tap: "builtin.discord_call.tap" },
+  audio_output: { tap: "builtin.audio_output.tap" },
+  mixer: { tap: "builtin.mixer.tap" },
+  microphone: { tap: "builtin.microphone.tap" },
 };
 
 export function newWidget(type, id, x, w) {
@@ -192,6 +227,8 @@ export function widgetTitle(widget, t) {
       return widget.text || t("widget.text");
     case "discord_voice":
       return widget.guild_name || t("widget.discord_voice");
+    case "ping":
+      return widget.host ? `${t("widget.ping")} ${widget.host}` : t("widget.ping");
     default:
       return t(`widget.${widget.type}`);
   }

@@ -9,6 +9,7 @@ import { config, edit, toast, uniqueId } from "../lib/store.js";
 import { sensors, loadSensors, saveSection } from "../lib/sensors.js";
 import { Switch, ConfirmButton } from "../components/Dialog.js";
 import { Field, TextInput, Select, LocationField, forgetObsSources, forgetDiscordGuilds } from "../components/Fields.js";
+import { SoundPanel } from "./SoundPanel.js";
 
 export function ConnectionsView() {
   useEffect(() => { loadSensors(); }, []);
@@ -23,6 +24,7 @@ export function ConnectionsView() {
           <${Weather} />
         </div>
         <div class="stack" style=${{ gap: "18px" }}>
+          <${SoundPanel} />
           <${Notifications} />
           <${Webhooks} />
         </div>
@@ -242,7 +244,8 @@ function Notifications() {
   const n = config.value.settings.notifications;
   const o = config.value.settings.overlays;
   const set = (patch, coalesce) => edit((d) => Object.assign(d.settings.notifications, patch), { coalesce });
-  const setOverlay = (patch) => edit((d) => Object.assign(d.settings.overlays, patch));
+  const setOverlay = (patch, coalesce) => edit((d) => Object.assign(d.settings.overlays, patch), { coalesce });
+  const alertMs = o.alert_duration_ms ?? 20000;
   return html`
     <section class="panel">
       <header><${Icon} name="bell" /><h3>${t("notify.title")}</h3></header>
@@ -259,6 +262,13 @@ function Notifications() {
         <hr class="divider" />
         <div class="field inline"><span>${t("overlay.volume")}</span><${Switch} ariaLabel=${t("overlay.volume")} checked=${o.volume} onChange=${(volume) => setOverlay({ volume })} /></div>
         <div class="field inline"><span>${t("overlay.track")}</span><${Switch} ariaLabel=${t("overlay.track")} checked=${o.now_playing} onChange=${(now_playing) => setOverlay({ now_playing })} /></div>
+        <hr class="divider" />
+        <div class="field inline"><span>${t("overlay.alerts")}</span><${Switch} ariaLabel=${t("overlay.alerts")} checked=${o.alerts ?? true} onChange=${(alerts) => setOverlay({ alerts })} /></div>
+        <small class="hint" style=${{ marginTop: "-8px" }}>${t("overlay.alerts.hint")}</small>
+        ${(o.alerts ?? true) && html`
+          <${Field} label=${t("overlay.alerts.duration", { s: Math.round(alertMs / 1000) })}>
+            <input type="range" min="5000" max="120000" step="5000" value=${alertMs} onInput=${(e) => setOverlay({ alert_duration_ms: Number(e.currentTarget.value) }, "alert-dur")} />
+          <//>`}
         <div><button class="btn small" onClick=${() => api.post("/api/daemon/notify", { text: t("notify.test.text"), icon: "bell" }).catch((e) => toast(e.message, "error"))}>${t("notify.test")}</button></div>
       </div>
     </section>`;

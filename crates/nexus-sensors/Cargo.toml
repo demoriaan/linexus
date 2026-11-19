@@ -11,6 +11,8 @@ serde.workspace = true
 serde_json.workspace = true
 rumqttc.workspace = true
 tungstenite.workspace = true
+# Breaking-news keywords match headlines whatever Unicode form they use.
+unicode-normalization.workspace = true
 base64 = "0.22"
 # Already built for rumqttc's TLS; obs-websocket authentication needs SHA-256.
 ring = "0.17"

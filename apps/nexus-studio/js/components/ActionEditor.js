@@ -4,10 +4,11 @@ import { t } from "../lib/i18n.js";
 import { Icon } from "../lib/icons.js";
 import { profile, page, config } from "../lib/store.js";
 import { Field, TextInput, NumberInput, Select, AppField, EntityField, ArgsField, ObsField, defaultObsTarget, loadObsSources, DiscordChannelField, defaultDiscordChannel, loadDiscordGuilds } from "./Fields.js";
+import { OutputsField } from "./SoundFields.js";
 
 export const ACTION_GROUPS = [
   ["open", ["launch_app", "open_url", "open_path"]],
-  ["media", ["media", "volume", "microphone_mute"]],
+  ["media", ["media", "volume", "microphone_mute", "audio_output"]],
   ["input", ["keyboard_shortcut", "text_input"]],
   ["strip", ["next_page", "previous_page", "go_to_page", "go_back", "switch_profile", "next_profile", "previous_profile", "brightness", "display_off"]],
   ["system", ["lock_screen", "home_assistant", "obs", "discord", "http_request", "shell_command", "sequence"]],
@@ -150,6 +151,10 @@ function ActionFields({ value, set, depth }) {
       </div>`;
     case "sequence":
       return html`<${SequenceEditor} value=${value} set=${set} depth=${depth} />`;
+    case "audio_output":
+      return html`<${Field} group label=${t("action.audio_output.devices")}>
+        <${OutputsField} value=${value.devices} onChange=${(devices) => set({ devices: devices.length ? devices : undefined })} />
+      <//>`;
     default:
       return html`<p class="hint">${t(`action.${value.type}.hint`)}</p>`;
   }

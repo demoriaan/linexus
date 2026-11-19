@@ -11,12 +11,13 @@ Linexus Studio writes the configuration for you. This page describes the file fo
 | `~/.local/state/linexus/runtime.json` | Last active profile, page and brightness, restored when the daemon starts | Written by the daemon |
 | `~/.local/state/linexus/events.jsonl` | Event log, see [local-api.md](local-api.md#event-log) | Written by the daemon |
 | `~/.local/state/linexus/rss-cache/`, `rss-seen.json`, `webhooks/` | Feed caches, read and hidden headlines, received webhooks | Written by the daemon and Studio |
+| `~/.local/state/linexus/alert-seen.json` | Breaking news already seen, so a restart shows nothing twice | Written by the daemon |
 
 `~/.config` stands for `$XDG_CONFIG_HOME` when that variable is set and not empty, and `~/.local/state` for `$XDG_STATE_HOME` when it is set. `linexusctl config path` prints the config path in use.
 
 When `config.json` does not exist, the daemon shows the built-in default pages without writing a file. The daemon, Studio and `linexusctl` accept `--config <file>` to use another file.
 
-This page covers `config.json` only. `sensors.json` is managed by Studio and is not part of `.nexuspack` files.
+This page covers `config.json`, apart from the feed fields for [breaking news](#news-feeds-and-breaking-news). `sensors.json` is managed by Studio and is not part of `.nexuspack` files.
 
 ## Working with the file
 
@@ -74,9 +75,11 @@ All fields are optional.
 | `idle` | object | see below | Dimming and turning off when nobody touches the strip |
 | `weather` | location or `null` | `null` | Default place for weather widgets: `{"name": "Berlin", "latitude": 52.52, "longitude": 13.405}` |
 | `notifications` | object | see below | Desktop notifications on the strip |
-| `overlays` | object | see below | Short pop-ups for volume and track changes |
+| `overlays` | object | see below | Short pop-ups for volume and track changes, and breaking-news banners |
 | `discord` | object | see below | Discord's notifications and the microphone badge |
+| `audio` | object | see below | Names, order and visibility of sound outputs and microphones in the sound widgets |
 | `touch` | object | see below | Correction for a touch panel that reads touches beside the finger |
+| `ping` | object | see below | Default host for [`ping`](#ping) widgets and the `net.ping` readings |
 
 `idle`:
 
@@ -112,7 +115,10 @@ Notification text is cut to 1024 characters. A picture sent inline with more tha
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `volume` | boolean | `true` | Show a volume bar when the system volume changes, unless the page already has a volume widget |
+| `privacy` | boolean | `true` | "Who is listening?": while another app records from a microphone or has a camera open, a red pill at the right edge of every page names the app with a microphone or camera icon. Five seconds after the apps last changed it shrinks to its icons, out of the way of sliders below it, and a change of apps names them again. A tap on the pill, named or shrunk, lists every app with its device ("Microphone, A50 Mic", "Camera, Droidcam") and a Close button; the list closes by itself after 20 seconds. See [How the privacy badge decides](#how-the-privacy-badge-decides). |
 | `now_playing` | boolean | `true` | Show the new track when the playing track changes, unless the page already has a media widget |
+| `alerts` | boolean | `true` | Show breaking news from alert feeds as a banner across the strip, see [News feeds and breaking news](#news-feeds-and-breaking-news). Off, breaking news only heads the news widget. |
+| `alert_duration_ms` | number | `20000` | How long a banner stays, 5000 to 120 000 ms. A headline too long for the strip scrolls to its end first, which can make it stay up to 60 seconds. |
 
 `touch`:
 
@@ -124,6 +130,17 @@ Notification text is cut to 1024 characters. A picture sent inline with more tha
 Both stay within ±100. The daemon corrects the strip's own touches only; taps from Studio's mirror and the emulator are exact.
 
 Studio → Device → Calibrate measures it: the strip shows five marks across its width, twice, one after the other, and you touch the center of each. A touch more than 70 px from its mark does not count and the mark stays. A panel reading further off than that cannot be calibrated; set the values by hand (up to ±100). A line fitted through the ten touches gives both values, which Studio applies right away and offers to undo; values under 10 px at both edges are within normal finger accuracy and count as no correction. One touch more than 20 px off the fitted line is left out; a calibration fails when more of them do, when the touches stretch the strip by more than 25 %, or when the marks are missed for 30 seconds; with no touch for 30 seconds it is cancelled. By hand, `linexusctl touch` prints what the panel reports while `linexusctl demo --pattern border-grid` shows lines every 100 px (stop the daemon first).
+
+`ping`:
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `host` | string | `"1.1.1.1"` | Host name or IP address for ping widgets without a `host` of their own and for the `net.ping*` readings |
+| `interval_ms` | number | `1000` | Time between two probes of a host, 250 to 60 000 ms |
+
+The daemon only pings while the active profile shows a `ping` widget or a `net.ping*` reading (in a `metric` widget, its `secondary` reading or a text `{token}`), and not while the strip is off or unplugged. Each host gets one probe at a time, one per interval. A probe counts as lost when no answer comes within a second, or within its red threshold plus half a second when a `ping` widget for that host (or a `metric` widget showing `net.ping`) turns red later. A lost probe holds the next one back until that time ran out, so with a shorter interval a host that does not answer is probed once per timeout.
+
+Probes are ICMP echo requests through an unprivileged ping socket, which follows network changes (a new address, another Wi-Fi, a VPN). Where the kernel does not allow those to your user (`net.ipv4.ping_group_range`), the daemon times a TCP connection to port 443 instead and the widget says `TCP`. Host names are looked up in the background, again every 5 minutes, and after 30 seconds when five probes in a row get lost. After five lost probes in a row the next address of the name gets a turn (IPv4 when IPv6 does not get through, for example).
 
 `discord` (needs Discord connected in Studio, see [`discord`](#discord)):
 
@@ -179,6 +196,41 @@ Swipes and the `next_page` and `previous_page` actions cycle through the pages t
 | `color` | `"#rrggbb"` | none | Solid colour, drawn under the image |
 | `fit` | `"fill"`, `"fit"`, `"stretch"` | `"fill"` | How the image covers the strip: crop to fill, fit inside, or stretch |
 | `dim_percent` | number | `0` | Darkens the page so widgets stay readable, 0 to 90 |
+
+`audio`:
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `devices` | array | `[]` | Your names, order and visibility for sound devices, at most 64 entries |
+
+Each entry of `devices`:
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `node` | string | required | The device's PipeWire `node.name`, for example `alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-game`. `wpctl status -n` lists them, and Studio shows them under Connections → Sound. |
+| `name` | string | not set | Shown instead of the name Linexus makes from PipeWire's description, at most 64 characters |
+| `hidden` | boolean | not set | `true` leaves the device out of the sound widgets and of `audio_output` buttons without a device list, even while it is in use; `false` shows a device that is hidden by default |
+
+The sound widgets show listed devices first, in the order listed, and the others after them as PipeWire ranks them. Virtual devices are hidden unless an entry says otherwise or they are in use: nodes marked `node.virtual`, null sinks, ALSA loopback devices (`snd_aloop`), loopback modules and the filters PipeWire runs (echo cancelling, noise filters: nodes with a `node.link-group` and no device). The output and the input in use always show, unless an entry hides them. After you switch from a virtual device to another one on the strip, it is offered again only when an entry shows it (switch it on in Studio). Studio → Connections → Sound edits the list: rename a device, switch it off for the strip or move it up.
+
+```json
+"audio": {
+  "devices": [
+    { "node": "alsa_output.pci-0000_11_00.1.hdmi-stereo-extra2", "name": "Monitor" },
+    { "node": "alsa_input.usb-Astro_Gaming_Astro_A50-00.mono-chat", "name": "A50 Mic" },
+    { "node": "alsa_output.pci-0000_13_00.4.iec958-stereo", "hidden": true }
+  ]
+}
+```
+
+### How the privacy badge decides
+
+The daemon follows PipeWire with `pw-dump --monitor` while the badge is switched on or the profile uses a sound widget or an `audio_output` action, and not while the strip is off or unplugged. The badge counts:
+
+- **Microphones:** a recording stream that is running (not corked) and linked to an input. For a virtual input (a noise filter such as rnnoise or DeepFilter, echo cancelling, a loopback, EasyEffects' source) the daemon follows PipeWire's links upstream, through the other nodes of a filter (those sharing its `node.link-group`): the recording counts when a real microphone feeds the chain and when nothing tells what feeds it, and does not count when only outputs' monitors feed it (a loopback of what an output plays) or for the capture side of the ALSA loopback card. EasyEffects shows as well while it records the microphone for its source. Recordings of an output (monitor captures, as screen recorders make them), volume applets' peak meters (`stream.monitor`, `pulse.peak-detect`) and PipeWire's own streams (program `pipewire` or `wireplumber`) do not count, and neither does the level meter of the [`microphone`](#microphone) widget, which carries the daemon's process id in its node name.
+- **Cameras:** a PipeWire camera (`Video/Source`) that is running and linked to an app, named after that app; and any process of yours that holds `/dev/videoN` open (found in `/proc/<pid>/fd`), which also finds apps reading a v4l2loopback camera such as Droidcam directly. The program feeding a v4l2loopback camera (the Droidcam client, OBS's virtual camera) holds it open too and is named as well: the open files do not tell feeding from watching reliably. PipeWire's own processes are left out, since they open cameras for the apps they serve, and processes of other users cannot be looked into. The scan of open files runs when inotify sees a camera opened or closed, and every 30 seconds besides (every 3 seconds when a camera cannot be watched).
+
+The app's name is PipeWire's `application.name`, or the program's name made readable (`obs` → `OBS`, `steamwebhelper` → `Steam`). The pill sits left of the Discord microphone badge while that shows. Only what it draws takes a touch, named or shrunk.
 
 ## Widgets
 
@@ -236,6 +288,16 @@ Download and upload speed (`net.down` and `net.up`).
 |---|---|---|
 | `interface` | not set | Accepted, but not applied yet; the widget shows the sum of all interfaces except loopback |
 
+### ping
+
+Round trip to a host: the latest one in large digits, a graph of the last 60 probes with a red line for each lost one, and the jitter (mean difference between consecutive round trips) and packet loss over those probes. Wide widgets add the lowest, average and highest round trip; below 120 pixels only the round trip and the loss remain. The default gateway is called "Router". Until the first answer the widget says it is measuring; it also says when a name does not resolve or the host stopped answering.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `host` | not set | Host name or IP address; `settings.ping.host` when not set |
+| `warn_ms` | `60` | Round trip from which the reading turns amber |
+| `critical_ms` | `120` | Round trip from which the reading turns red; it is red as well while more than 2 % of the probes are lost. A probe waits for an answer up to this threshold plus half a second, but at least a second, so thresholds above half a second make probes wait longer, see [`ping`](#settings). |
+
 ### media
 
 Album art, title and playback buttons for the MPRIS player the desktop reports.
@@ -259,6 +321,47 @@ Built-in tap: the buttons skip back, play or pause, and skip forward; tapping th
 | `source` | `"system"` | `system` (the default output), `discord_input` (Discord's microphone level, 0 to 100 %) or `discord_output` (Discord's output level, 0 to 200 %) |
 
 Built-in touch: slide along the bar to set the volume; tap the icon to mute or unmute (for `discord_output`: deafen). The system volume uses `wpctl`, or `pactl` when `wpctl` is missing.
+
+### audio_output
+
+Your sound outputs as tiles: a headset, headphones, a screen (HDMI or DisplayPort) or a speaker icon, the name and the device below it. The output in use has an accent frame. A tap sends the sound there: it becomes the default output and the apps playing on the previous one move along. Right of the tiles, a slider sets the volume of the output in use. When more outputs exist than fit, a swipe pages through them (dots show where you are) and a swipe on the last page changes the strip's page as usual. Names, order and hidden devices come from [`settings.audio`](#settings).
+
+| Field | Default | Meaning |
+|---|---|---|
+| `show_volume` | `true` | The volume slider of the output in use |
+
+```json
+{ "id": "outputs", "x": 0, "w": 640, "type": "audio_output" }
+```
+
+Outputs change with `wpctl set-default`, and WirePlumber moves the streams that follow the default output by itself. A stream sent to the previous output by name (`target.object` in PipeWire's metadata or in its own properties, as `pavucontrol` or `pactl move-sink-input` leave it) is sent to the new one by its `object.serial`, as `pactl` does it, with `pw-metadata`; streams sent to other outputs stay where they are. The volume uses `wpctl set-volume`. While no output shows, the widget says so and takes no touches.
+
+### mixer
+
+One entry per app that plays sound: a letter in a colour of its own, the name, the volume (or "muted") and a slider. A tap on the letter mutes or unmutes the app, a slide sets its volume; both apply to all of the app's streams. Apps appear when they start playing and go about 5 seconds after their last stream ends or pauses. Up to four apps show side by side on the full strip, fewer on a narrower widget; a swipe pages through the rest.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `pinned` | `[]` | App names that come first while they play, in this order (at most 16; compared without regard to case) |
+
+```json
+{ "id": "apps", "x": 0, "w": 640, "type": "mixer", "pinned": ["Spotify", "Discord"] }
+```
+
+### microphone
+
+The microphone in use, its live level, mute for all apps and the input volume. A tap on the device tile takes the next input the strip shows (hidden inputs, and virtual ones not in use, are skipped) and makes it the default. While no input shows (none is in use, or the one in use is hidden), the widget says so and takes no touches. The level shows as 25 segments: green, amber from the 17th, red from the 22nd; below it the state ("Voice coming through", "silent" or "muted for all apps"). The mute tile mutes the default input for every app (`wpctl set-mute`), and the slider sets its volume.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `show_level` | `true` | The level meter |
+| `show_volume` | `true` | The input volume slider |
+
+```json
+{ "id": "mic", "x": 0, "w": 640, "type": "microphone" }
+```
+
+The level meter records the microphone: only while a page with this widget shows the input, the input is not muted and the strip is on and plugged in, the daemon runs `pw-record` on the default input at 16 kHz mono and turns the peak of every 64 ms into a level (−60 to 0 dBFS as 0 to 100 %). Nothing is stored or sent. The recorder stops when you leave the page, mute or hide the input, or the strip goes off or is unplugged, and follows a change of input. It is marked as a peak meter (`stream.monitor`), so WirePlumber does not switch a Bluetooth headset to its call profile for it. While it runs, your desktop's microphone indicator lights up (KDE Plasma shows one in the panel); the [privacy badge](#how-the-privacy-badge-decides) leaves this recording out. Switch `show_level` off to never record.
 
 ### button
 
@@ -284,6 +387,8 @@ Two rows of headlines from the feeds and webhooks configured in Studio.
 | `feeds` | `[]` | Feed ids. Accepted, but not applied yet; the widget shows all enabled sources. |
 
 Built-in touch: tap the left half to open the top headline, the right half for the bottom one; double tap left or right to step back or ahead a pair; hold to hide a headline.
+
+Breaking news comes first for an hour, labelled BREAKING (EILMELDUNG, ALERTE) in the theme's `critical` colour; see [News feeds and breaking news](#news-feeds-and-breaking-news).
 
 ### weather
 
@@ -435,6 +540,14 @@ Toggles the mute state of the default microphone with `wpctl`, or `pactl` when `
 
 ```json
 { "type": "microphone_mute" }
+```
+
+### audio_output
+
+Switches the sound output, like a tap on an [`audio_output`](#audio_output) widget's tile: the device becomes the default output and the apps playing on the previous one move along. `devices` lists PipeWire node names (at most 16). With one, a tap switches to it; with several, each tap takes the next one after the output in use; without any, each tap takes the next output the strip shows. Devices that are not connected are skipped.
+
+```json
+{ "type": "audio_output", "devices": ["alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-game", "alsa_output.pci-0000_11_00.1.hdmi-stereo-extra2"] }
 ```
 
 ### keyboard_shortcut
@@ -656,15 +769,61 @@ linexusctl daemon metrics temp
 | `disk.write` | bytes/s | Disk writes |
 | `net.down` | bytes/s | Received, all interfaces except loopback |
 | `net.up` | bytes/s | Sent, all interfaces except loopback |
+| `net.ping` | ms | Latest round trip to `settings.ping.host`; left out while the host does not answer |
+| `net.ping.jitter` | ms | Mean difference between consecutive round trips over the last 60 probes |
+| `net.ping.loss` | % | Lost probes among the last 60 |
 | `volume.level` | % | Output volume |
 | `hwmon:<chip>/<label>` | °C, rpm, W or V | One per hardware sensor input |
 | `battery:<kind>/<key>` | % | One per battery |
 
 The `gpu.*` readings come from an AMD GPU (sysfs and hwmon) or an NVIDIA GPU on the proprietary driver (`nvidia-smi`). With both, they follow the one with more video memory, which is usually the graphics card rather than the processor's integrated GPU. An NVIDIA GPU in a laptop that sleeps while unused is not asked while it sleeps: `gpu.*` then shows the integrated AMD GPU where there is one, and is left out otherwise.
 
+The `net.ping*` readings exist only while the active profile uses one of them or shows a `ping` widget for `settings.ping.host`, see [`ping`](#settings). The `net.ping` graph has a point per probe, so it keeps moving while the host does not answer; a lost probe repeats the round trip before it; the graphs start over when `settings.ping.host` changes.
+
 `hwmon:<chip>/<label>`: `<chip>` is the hwmon driver name, `<label>` the driver's label for the input or the input name (`temp1`, `fan2`). Both are lower-cased, and characters other than letters, digits, `-` and `.` become `_`. When two inputs end up with the same id, the later ones get `-2`, `-3` and so on. Examples: `hwmon:k10temp/tctl`, `hwmon:amdgpu/edge`, `hwmon:nct6798/fan2`.
 
 `battery:<kind>/<key>`: read from `upower --dump` when UPower is installed, otherwise from `/sys/class/power_supply`. `<kind>` is what the battery powers (`battery` for the computer itself; with UPower also `mouse`, `keyboard`, `headset`, `gaming-input` and others; without UPower `device` for peripherals). `<key>` is the device's name in the kernel, for example `battery:mouse/hidpp_battery_0`.
+
+## News feeds and breaking news
+
+Studio → News edits the feeds in `sensors.json`. Besides the fields Studio has always written (`id`, `url`, `limit`, `refresh_seconds`, `show_mode`, `priority`, `max_age_seconds`, `tap_behavior`), a feed has these:
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `format` | `"rss"`, `"tagesschau"` | `"rss"` | `rss` reads RSS and Atom. `tagesschau` reads the tagesschau API (`https://www.tagesschau.de/api2u/homepage/`) and keeps only the items it marks as breaking news. An unknown value reads as `rss`. |
+| `alert` | boolean | `true` for `tagesschau`, else `false` | New items show as breaking news |
+| `alert_keywords` | array of strings | `[]` | When not empty, only items whose title contains one of them count as breaking news. At most 20, each up to 60 characters. |
+| `refresh_seconds` | number | `120` for `tagesschau`, else `900` | Seconds between fetches, at least 60. An alert feed is fetched at least every 15 minutes: a longer interval counts as 900. |
+
+```json
+{
+  "rss": [
+    {"id": "tagesschau", "url": "https://www.tagesschau.de/api2u/homepage/", "format": "tagesschau", "alert": true, "refresh_seconds": 120},
+    {"id": "kicker", "url": "https://newsfeed.kicker.de/news/aktuell", "alert": true, "alert_keywords": ["Bayern*", "Abpfiff"]}
+  ]
+}
+```
+
+A keyword matches whole words, regardless of case (`KÖLN` matches "Köln", `strasse` matches "Straße", `istanbul` matches "İstanbul"); runs of spaces count as one, so a keyword can be several words. Headline and keyword are compared in the same Unicode form (NFC), so an umlaut that a feed sends as a letter followed by a combining mark matches as well. The characters before and after the match must not be letters, digits or combining marks: `Tor` matches "Tor in der 90. Minute" and "Last-Minute-Tor" but not "Torwart", and `Ko` does not match "Köln". A `*` at the end also allows longer words: `Bayern*` matches "Bayerns". Otherwise accents and umlauts must be written as in the headline; `ue` does not match `ü`.
+
+An item of an alert feed is breaking news when all of these hold:
+
+- **The source is not new.** The first successful fetch of a feed, after the daemon starts with no record of it or after its address changed, only records what is there; nothing from it shows. A fetch succeeds only when the answer is a feed: an RSS, Atom or RSS 1.0 document, with or without items, or the tagesschau API's answer. Anything else, such as a network's login page, is not stored and counts as a failed fetch; the headlines from before stay up.
+- **The item is new.** An item counts as seen when the same title with the same link, or the same `guid` (`id` in Atom), came before, so a corrected title under the same `guid` does not show again. What was seen is kept in `alert-seen.json` for 14 days and survives a restart: up to 2000 entries per feed, one per item and one more for an item with a `guid`, so at least the last 1000 items.
+- **The item is recent.** Its date (`pubDate`, `dc:date`, `published` or `updated`; `date` in the tagesschau API) is at most 30 minutes old. When the fetch is at most 30 minutes old and the feed's previous successful fetch came at most an hour before it, an item up to 6 hours old counts too if its date is after that previous fetch or after the newest item it brought, with 5 minutes to spare. That covers a feed checked less often than every 30 minutes (one that backs off after errors), dates without a time zone and a server clock that is behind; after a longer gap (the computer was off, the feed was down) only the 30 minutes count. An item without a date counts only in that case. The tagesschau API marks items as breaking news after they appeared, so there the moment that counts is when an item first shows up marked: in that case it counts up to 6 hours old.
+- **A keyword matches**, when the feed has keywords.
+- **It is not a repeat.** A story that showed in the last hour does not show again. Links are compared ignoring `http` or `https`, `www.`, `utm_` parameters and a trailing slash. From the same feed a repeat is an item with the same link, such as a title corrected under it; entries of a live blog that differ only after the `#`, and two goals both called "Tor für Bayern" with links of their own, each show. From another feed it is the same link, also ignoring what follows a `#`, or the same title (letters and digits only, compared as keywords are).
+
+Breaking news shows as a banner across the strip: the label BREAKING (EILMELDUNG in German, ALERTE in French), the source and the headline, which scrolls when it is too long, in the theme's `critical` colour. It stays for `overlays.alert_duration_ms` and the strip then returns to where it was. A tap opens the item unless the feed's `tap_behavior` is `none`, and closes the banner; holding as long as the news widget's hold time closes it without opening. Either marks the headline read.
+
+Banners rank above everything else:
+
+- A banner covers notifications. A notification that is showing when a banner arrives waits and shows again in full afterwards; notifications and toasts that arrive during a banner wait for it too. Volume and track pop-ups are left out while a banner shows.
+- Several banners show one after the other, oldest first. At most 5 wait; with more, the oldest is dropped. A banner that waited 30 minutes, while the strip was off or a calibration ran, is dropped.
+
+For an hour after it appears, an item heads the news widget with the label; holding it there hides it as usual. The daemon keeps this hour in memory: after a restart the item takes its normal place again (it does not show as a banner twice). Both times are wall-clock time: the time a suspended computer slept counts. A feed switched off (`show_mode` `hidden`, the switch in Studio → News) is not fetched at all: it brings no headlines, no breaking news and no banners. With `overlays.alerts` off there are no banners, and breaking news only heads the news widget.
+
+Feed requests send `User-Agent: Linexus/<version> (+https://github.com/demoriaan/linexus)` and nothing about you: no cookies, no account. They ask for a compressed answer, which brings the tagesschau API down from about 650 KB to about 100 KB, and give up after 20 seconds. Each fetch waits up to a tenth of the interval longer (at most 30 seconds), so feeds of several computers do not line up. A failed fetch, including an HTTP 429 or 5xx answer, is retried after 30 seconds, then after twice as long each time, at most 10 minutes. The tagesschau API allows 60 requests an hour; the default of two minutes stays well below that.
 
 ## Validation rules
 
@@ -680,11 +839,15 @@ A config is refused when any of these fails:
 - `switch_profile` names an existing profile; `go_to_page` names a page of the same profile.
 - `volume` and `brightness` actions with `"command": "set"` have a `percent` of at most 100.
 - `idle.dim_percent` is at most 100, and hidden pages with `auto_return_seconds` wait at least 1 second.
+- `overlays.alert_duration_ms` is between 5000 and 120 000.
 - `shell_command` actions and `command` widgets name a program without `/`.
 - `join_voice` Discord actions name a channel id (digits only), and a `discord_voice` widget's `guild_id`, when set, is digits only.
+- `settings.audio.devices` has at most 64 entries, each `node` listed once, not empty and at most 256 characters, and each `name`, when set, not blank and at most 64 characters. A mixer's `pinned` and an `audio_output` action's `devices` have at most 16 entries, none blank.
 - `http_request` URLs start with `http://` or `https://`, and `content_type` contains no line break.
 - Sequences nest at most one level deep, have at most 16 steps and wait at most 60 000 ms between steps.
 - Background `dim_percent` is at most 90.
+- `settings.ping.host` and a `ping` widget's `host` are an IP address or a host name of at most 253 characters: dot-separated labels of letters, digits and inner hyphens, each 1 to 63 characters, the last one not all digits. Unspecified, multicast and broadcast addresses are refused, and so are IPv6 link-local ones (`fe80::/10`, which need an interface); an IPv4-mapped IPv6 address (`::ffff:192.0.2.1`) counts as the IPv4 address it carries.
+- `settings.ping.interval_ms` is 250 to 60 000; a `ping` widget's `warn_ms` and `critical_ms` are 1 to 10 000 and `warn_ms` is below `critical_ms`.
 - Embedded images (backgrounds, image widgets, button icons given as data URLs) start with `data:image/`, are base64 encoded and are at most 3 MiB long.
 
 Studio checks the same rules while you edit and shows what blocks saving.

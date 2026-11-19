@@ -1,5 +1,6 @@
 //! Picker data: the Lucide icon set, installed applications with their
-//! icons, place search for the weather widget and a weather probe.
+//! icons, place search for the weather widget, a weather probe and the
+//! default gateway for the ping widget.
 
 use crate::http::{percent_encode, Request, Response};
 use crate::providers::{self, AppEntry};
@@ -32,6 +33,7 @@ pub fn route(request: &Request, state: &AppState) -> Option<Response> {
         ("GET", "/api/app-icon") => app_icon(state, request),
         ("GET", "/api/geocode") => geocode(request),
         ("GET", "/api/weather") => weather(request),
+        ("GET", "/api/ping/gateway") => gateway(),
         _ => return None,
     };
     Some(response)
@@ -206,6 +208,12 @@ fn geocode(request: &Request) -> Response {
     }
 }
 
+/// The router, offered as a ping host; `null` without a default route.
+fn gateway() -> Response {
+    let gateway = nexus_sensors::default_gateway().map(|address| address.to_string());
+    Response::json(200, &json!({ "ok": true, "gateway": gateway }))
+}
+
 fn weather(request: &Request) -> Response {
     let coordinate = |key: &str, limit: f64| {
         request
@@ -252,6 +260,20 @@ mod tests {
             .find(|icon| icon[0] == "globe")
             .expect("globe icon");
         assert!(globe[2].as_str().unwrap().contains('<'), "svg markup");
+    }
+
+    #[test]
+    fn the_gateway_is_an_address_or_null() {
+        let body = json(&handle(&get("/api/ping/gateway"), &state()));
+        assert_eq!(body["ok"], true);
+        let gateway = &body["gateway"];
+        assert!(
+            gateway.is_null()
+                || gateway
+                    .as_str()
+                    .is_some_and(|g| g.parse::<std::net::Ipv4Addr>().is_ok()),
+            "{gateway}"
+        );
     }
 
     #[test]

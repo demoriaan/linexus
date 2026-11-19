@@ -59,6 +59,7 @@ pub enum Unit {
     Bytes,
     BytesPerSec,
     Megahertz,
+    Milliseconds,
     Plain,
 }
 
@@ -111,6 +112,31 @@ pub struct EntityInfo {
     pub on: Option<bool>,
 }
 
+/// A host the daemon pings, for ping widgets.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PingInfo {
+    pub host: String,
+    /// Round trip of each recent probe in milliseconds, oldest first;
+    /// `None` for a lost probe.
+    pub history: Vec<Option<f32>>,
+    /// The latest answered probe.
+    pub last_ms: Option<f32>,
+    pub avg_ms: Option<f32>,
+    pub min_ms: Option<f32>,
+    pub max_ms: Option<f32>,
+    pub jitter_ms: Option<f32>,
+    /// Share of lost probes; `None` before the first probe.
+    pub loss_percent: Option<f32>,
+    /// The last few probes all went unanswered.
+    pub down: bool,
+    /// The host name does not resolve.
+    pub unresolved: bool,
+    /// Measured by connecting to TCP port 443 instead of ICMP echo.
+    pub tcp: bool,
+    /// The host is this computer's default gateway.
+    pub gateway: bool,
+}
+
 /// OBS Studio's state while the daemon is connected to it.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ObsInfo {
@@ -156,6 +182,9 @@ pub struct NewsRow {
     pub source: String,
     pub headline: String,
     pub seen: bool,
+    /// Breaking news of the last hour: labelled as such instead of with its
+    /// source.
+    pub alert: bool,
 }
 
 /// Pacing of the headline marquee: a long headline rests at its start,
@@ -211,6 +240,18 @@ pub enum Overlay {
         /// Lucide icon name.
         icon: String,
         text: String,
+    },
+    /// A breaking-news banner.
+    Alert {
+        /// Feed name.
+        source: String,
+        headline: String,
+        /// Opened when the banner is tapped.
+        link: Option<String>,
+        /// The headline's card id.
+        id: String,
+        /// How a headline too long for the banner scrolls.
+        marquee: MarqueeStyle,
     },
 }
 
@@ -332,6 +373,98 @@ impl PartialEq for MediaInfo {
     }
 }
 
+/// Sound outputs, inputs and playing apps; set by the daemon.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AudioInfo {
+    /// Shown outputs in the order the widgets show them.
+    pub outputs: Vec<AudioDevice>,
+    pub inputs: Vec<AudioDevice>,
+    /// `node` of the output and input in use.
+    pub default_output: Option<String>,
+    pub default_input: Option<String>,
+    /// Apps that play sound, in the order they started.
+    pub apps: Vec<AudioApp>,
+    /// Live microphone level 0..=100 while the meter records.
+    pub level: Option<u8>,
+    /// Page of tiles per widget id, for widgets with more than fit.
+    pub pages: HashMap<String, usize>,
+    /// The device or app under the finger while a slider is dragged.
+    pub grabbed: Option<String>,
+    /// A device or app whose slider was let go, and where: shown until
+    /// PipeWire reports the new volume, so the knob does not jump back.
+    pub held: Option<(String, f32)>,
+}
+
+impl AudioInfo {
+    /// Where a slider let go of shows while PipeWire catches up.
+    pub fn held(&self, key: &str) -> Option<f32> {
+        self.held
+            .as_ref()
+            .filter(|(held, _)| held == key)
+            .map(|(_, fraction)| *fraction)
+    }
+
+    pub fn output(&self) -> Option<&AudioDevice> {
+        let node = self.default_output.as_deref()?;
+        self.outputs.iter().find(|device| device.node == node)
+    }
+
+    pub fn input(&self) -> Option<&AudioDevice> {
+        let node = self.default_input.as_deref()?;
+        self.inputs.iter().find(|device| device.node == node)
+    }
+
+    pub fn page(&self, widget: &str) -> usize {
+        self.pages.get(widget).copied().unwrap_or_default()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AudioKind {
+    Headset,
+    Monitor,
+    #[default]
+    Speaker,
+    Microphone,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AudioDevice {
+    /// PipeWire's `node.name`.
+    pub node: String,
+    pub name: String,
+    /// Smaller line below the name.
+    pub detail: String,
+    pub kind: AudioKind,
+    pub volume: u8,
+    pub muted: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AudioApp {
+    pub name: String,
+    pub volume: u8,
+    pub muted: bool,
+}
+
+/// Apps that have a microphone or camera open, for the red pill.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PrivacyInfo {
+    pub uses: Vec<PrivacyEntry>,
+    /// The list of them fills the strip.
+    pub open: bool,
+    /// The pill shows its icons only, a while after the apps last changed.
+    pub compact: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PrivacyEntry {
+    pub app: String,
+    pub camera: bool,
+    /// Which microphone or camera.
+    pub device: String,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct LiveData {
     pub time: LocalTime,
@@ -359,6 +492,12 @@ pub struct LiveData {
     pub obs: Option<ObsInfo>,
     /// None while Discord is not connected (or not set up).
     pub discord: Option<DiscordInfo>,
+    /// Pinged hosts by name; `""` is `settings.ping.host`.
+    pub ping: HashMap<String, PingInfo>,
+    /// None while PipeWire is not followed (no sound widget shows).
+    pub audio: Option<AudioInfo>,
+    /// None or empty while nobody records or films.
+    pub privacy: Option<PrivacyInfo>,
 }
 
 impl LiveData {

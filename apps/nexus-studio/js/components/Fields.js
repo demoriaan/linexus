@@ -1,5 +1,6 @@
 // Inputs used by the inspector: plain fields plus pickers for icons,
-// applications, metrics, places, Home Assistant entities and images.
+// applications, metrics, places, Home Assistant entities, images and ping
+// hosts.
 import { html, useEffect, useMemo, useState } from "../lib/html.js";
 import { api } from "../lib/api.js";
 import { t, lang } from "../lib/i18n.js";
@@ -221,10 +222,18 @@ export function AppField({ value, onChange }) {
 
 // ---- metrics -------------------------------------------------------------------
 
-const UNIT_SUFFIX = { percent: "%", celsius: "°C", watts: "W", rpm: "RPM", megahertz: "MHz" };
+const UNIT_SUFFIX = { percent: "%", celsius: "°C", watts: "W", rpm: "RPM", megahertz: "MHz", milliseconds: "ms" };
+
+// The daemon reports ping readings only while the strip shows them, so they
+// are offered before it has any.
+const PING_METRICS = [
+  { id: "net.ping", label: "Ping", unit: "milliseconds", value: null },
+  { id: "net.ping.jitter", label: "Jitter", unit: "milliseconds", value: null },
+  { id: "net.ping.loss", label: "Packet loss", unit: "percent", value: null },
+];
 
 export function formatReading(m) {
-  if (!m) return "";
+  if (!m || m.value == null) return "";
   if (m.unit === "bytes" || m.unit === "bytes_per_sec") {
     const units = ["B", "KB", "MB", "GB", "TB"];
     let v = m.value;
@@ -232,31 +241,81 @@ export function formatReading(m) {
     while (v >= 1000 && i < units.length - 1) { v /= 1024; i += 1; }
     return `${v >= 100 || i === 0 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}${m.unit === "bytes_per_sec" ? "/s" : ""}`;
   }
-  const digits = Math.abs(m.value) < 10 && m.unit === "plain" ? 1 : 0;
+  const digits = Math.abs(m.value) < 10 && (m.unit === "plain" || m.unit === "milliseconds") ? 1 : 0;
   return `${m.value.toFixed(digits)} ${UNIT_SUFFIX[m.unit] ?? ""}`.trim();
 }
 
 export function MetricField({ value, onChange, optional }) {
   useEffect(() => { if (!metricsCatalog.value.length) refreshMetrics(); }, []);
+  const catalog = useMemo(() => {
+    const missing = PING_METRICS.filter((p) => !metricsCatalog.value.some((m) => m.id === p.id));
+    return [...metricsCatalog.value, ...missing];
+  }, [metricsCatalog.value]);
   const groups = useMemo(() => {
     const map = new Map();
-    for (const m of metricsCatalog.value) {
+    for (const m of catalog) {
       const family = m.id.includes(":") ? m.id.split(":")[0] : m.id.split(".")[0];
       if (!map.has(family)) map.set(family, []);
       map.get(family).push(m);
     }
     return [...map.entries()];
-  }, [metricsCatalog.value]);
-  const known = metricsCatalog.value.some((m) => m.id === value);
+  }, [catalog]);
+  const known = catalog.some((m) => m.id === value);
   return html`
     <select value=${value ?? ""} onChange=${(e) => onChange(e.currentTarget.value || null)}>
       ${optional && html`<option value="">${t("common.none")}</option>`}
       ${!known && value && html`<option value=${value}>${value}</option>`}
       ${groups.map(([family, items]) => html`
         <optgroup label=${t(`metric.family.${family}`)}>
-          ${items.map((m) => html`<option value=${m.id}>${m.label} — ${formatReading(m)}</option>`)}
+          ${items.map((m) => html`<option value=${m.id}>${m.value == null ? m.label : `${m.label} — ${formatReading(m)}`}</option>`)}
         </optgroup>`)}
     </select>`;
+}
+
+// ---- ping hosts -------------------------------------------------------------------
+
+const PING_PRESETS = [["1.1.1.1", "Cloudflare"], ["9.9.9.9", "Quad9"]];
+let gatewayLookup = null;
+
+/** This computer's default gateway (the router), asked for once. */
+function useGateway() {
+  const [gateway, setGateway] = useState(null);
+  useEffect(() => {
+    gatewayLookup ??= api.get("/api/ping/gateway").then((data) => data.gateway ?? null).catch(() => null);
+    let current = true;
+    gatewayLookup.then((address) => { if (current) setGateway(address); });
+    return () => { current = false; };
+  }, []);
+  return gateway;
+}
+
+/**
+ * A host to ping: the router, a public resolver or any name or address.
+ * `optional` adds "default", which leaves it to the settings host.
+ */
+export function PingHostField({ value, onChange, optional, defaultHost }) {
+  const gateway = useGateway();
+  const presets = [...(gateway ? [[gateway, t("ping.host.router")]] : []), ...PING_PRESETS];
+  const [typing, setTyping] = useState(false);
+  const isPreset = presets.some(([host]) => host === value);
+  // Without a "default" choice an empty host is typed in, not a preset.
+  const mode = typing || (value && !isPreset) || (!optional && !value) ? "custom" : value || "";
+  const pick = (choice) => {
+    setTyping(choice === "custom");
+    if (choice !== "custom") onChange(choice || null);
+  };
+  // An optional host typed away falls back to the default.
+  const type = (text) => onChange(optional && text.trim() === "" ? null : text);
+  return html`
+    <div class="stack" style=${{ gap: "8px" }}>
+      <select value=${mode} onChange=${(e) => pick(e.currentTarget.value)}>
+        ${optional && html`<option value="">${t("ping.host.default", { host: defaultHost })}</option>`}
+        ${presets.map(([host, name]) => html`<option value=${host}>${host} (${name})</option>`)}
+        <option value="custom">${t("ping.host.custom")}</option>
+      </select>
+      ${mode === "custom" && html`
+        <${TextInput} value=${value} placeholder=${t("ping.host.placeholder")} onInput=${type} />`}
+    </div>`;
 }
 
 // ---- places ----------------------------------------------------------------------

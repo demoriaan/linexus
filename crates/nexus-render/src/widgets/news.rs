@@ -5,7 +5,7 @@
 use super::Ctx;
 use crate::canvas::{Bounds, Canvas};
 use crate::format::{self, Word};
-use crate::live::{MarqueeStyle, NewsRow};
+use crate::live::{Locale, MarqueeStyle, NewsRow};
 use crate::text::{self, FontFace, TextStyle};
 use nexus_config::{NewsFont, NewsProps};
 
@@ -50,13 +50,24 @@ pub fn headline_dwell_ms(text: &str, font: NewsFont, viewport: u32, style: &Marq
         let chars = text.chars().count() as u64;
         (chars * STATIC_PER_CHAR_MS).max(STATIC_MIN_DWELL_MS)
     } else {
-        let scroll_px = text_w - viewport + MARQUEE_END_PAD;
-        let scroll_ms = u64::from(scroll_px) * 1_000 / u64::from(style.speed_px_per_sec.max(1));
-        style.start_pause_ms + scroll_ms + style.end_pause_ms
+        marquee_run_ms(text_w, viewport, style)
     }
 }
 
-fn marquee_offset(text_w: u32, viewport: u32, phase_ms: u64, style: &MarqueeStyle) -> u32 {
+/// A full marquee run of a text `text_w` wide: start pause, scroll and end
+/// pause.
+pub(crate) fn marquee_run_ms(text_w: u32, viewport: u32, style: &MarqueeStyle) -> u64 {
+    let scroll_px = text_w.saturating_sub(viewport) + MARQUEE_END_PAD;
+    let scroll_ms = u64::from(scroll_px) * 1_000 / u64::from(style.speed_px_per_sec.max(1));
+    style.start_pause_ms + scroll_ms + style.end_pause_ms
+}
+
+pub(crate) fn marquee_offset(
+    text_w: u32,
+    viewport: u32,
+    phase_ms: u64,
+    style: &MarqueeStyle,
+) -> u32 {
     if text_w <= viewport {
         return 0;
     }
@@ -145,15 +156,15 @@ fn draw_row(
     } else {
         r.right() - BAR_W - 7.0
     };
-    let (source_color, headline_color) = if row.seen {
+    let (source_color, headline_color) = if row.alert {
+        (palette.critical, palette.text)
+    } else if row.seen {
         (palette.text_dim, palette.text_dim)
     } else {
         (palette.accent, palette.text)
     };
 
-    let label_style = TextStyle::new(FontFace::SemiBold, 11.0, source_color).tracking(0.5);
-    let mut label = short_source(&row.source).to_uppercase();
-    while text::measure(&label, &label_style) > LABEL_MAX_W && label.pop().is_some() {}
+    let (label, label_style) = row_label(row, ctx.live.locale, source_color);
     let baseline = r.y + 15.0;
     let label_w = canvas.text(inner_left, baseline, &label, &label_style);
 
@@ -180,6 +191,27 @@ fn draw_row(
     canvas.set_clip(previous_clip);
 }
 
+/// A row's label and its style, at most [`LABEL_MAX_W`] wide like the
+/// rotation assumes: the source cut to fit, or for breaking news the word
+/// for it in full, set tighter and smaller where it is long (EILMELDUNG).
+fn row_label(row: &NewsRow, locale: Locale, color: crate::Rgb) -> (String, TextStyle) {
+    let mut style = TextStyle::new(FontFace::SemiBold, 11.0, color).tracking(0.5);
+    if row.alert {
+        let label = format::word(Word::Breaking, locale).to_uppercase();
+        while text::measure(&label, &style) > LABEL_MAX_W && style.size > 8.0 {
+            if style.tracking > 0.0 {
+                style.tracking = 0.0;
+            } else {
+                style.size -= 0.5;
+            }
+        }
+        return (label, style);
+    }
+    let mut label = short_source(&row.source).to_uppercase();
+    while text::measure(&label, &style) > LABEL_MAX_W && label.pop().is_some() {}
+    (label, style)
+}
+
 /// Feed titles often read "Site - Section"; the site name is enough here.
 fn short_source(source: &str) -> &str {
     [" - ", " – ", " | ", ": "]
@@ -200,6 +232,31 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn labels_fit_the_width_the_rotation_assumes() {
+        let row = |source: &str, alert: bool| NewsRow {
+            source: source.into(),
+            headline: "Schlagzeile".into(),
+            seen: false,
+            alert,
+        };
+        let color = crate::Rgb::new(255, 255, 255);
+        for locale in [Locale::En, Locale::De, Locale::Fr] {
+            let (label, style) = row_label(&row("Example", true), locale, color);
+            assert_eq!(
+                label,
+                format::word(Word::Breaking, locale).to_uppercase(),
+                "never cut"
+            );
+            assert!(text::measure(&label, &style) <= LABEL_MAX_W, "{label}");
+            assert!(style.size >= 9.0, "{label} at {}", style.size);
+        }
+        let (label, style) = row_label(&row("A very long feed name", false), Locale::De, color);
+        assert!(text::measure(&label, &style) <= LABEL_MAX_W);
+        assert_eq!(style.size, 11.0);
+        assert!("A VERY LONG FEED NAME".starts_with(&label));
+    }
 
     #[test]
     fn short_headlines_dwell_for_reading_time() {

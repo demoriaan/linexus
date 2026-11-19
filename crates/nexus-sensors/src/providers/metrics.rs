@@ -19,6 +19,8 @@ pub enum MetricUnit {
     Bytes,
     BytesPerSec,
     Megahertz,
+    /// Round trips (`net.ping`).
+    Milliseconds,
     /// No unit; also used for hwmon voltages (volts).
     Plain,
 }

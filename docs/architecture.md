@@ -55,7 +55,8 @@ Lock and sleep detection (`session.rs`) is no thread: the main loop polls it at 
 | `main.rs` | Command line, wiring of all parts, device lock, restoring the last profile and page |
 | `hardware.rs` | Hardware loop, emulator loop, one-shot rendering, opening the HID device, signal handling |
 | `engine.rs` | The `Engine`: touches to interactions to actions, API requests, the periodic `tick`, frame pacing |
-| `scene.rs` | Frame composition: page drags and transitions, press feedback, page indicator, overlays (toast, notification, volume, now playing) |
+| `scene.rs` | Frame composition: page drags and transitions, press feedback, page indicator, overlays (toast, notification, volume, now playing) and the breaking-news banner above them |
+| `alerts.rs` | Breaking news: what was seen (`alert-seen.json` next to `runtime.json`), the banner queue, the labelled items heading the news widget |
 | `touch.rs` | `TouchMachine`, the gesture state machine |
 | `runtime.rs` | `Runtime`: config, active profile and page, `go_back` history, brightness, blank flags, idle timers; `RuntimeState` in `runtime.json` |
 | `live.rs` | `LiveBuilder` (metric history for graphs, assembly of `LiveData`) and the provider worker |
@@ -250,7 +251,7 @@ linexusctl render-preview --overlay notification --scale 2 --out notification.pn
 | `--profile <ID>` | Profile in `--config`; the active profile by default |
 | `--page <ID>` | Page in `--config`; the profile's first visible page by default |
 | `--pattern <NAME>` | Test pattern instead of a page: `rgb-bars` or `border-grid` |
-| `--overlay <NAME>` | Pop-up instead of a page: `notification`, `volume` or `track` |
+| `--overlay <NAME>` | Pop-up instead of a page: `notification`, `volume`, `track`, or a breaking-news banner: `alert`, `alert-long` (a headline that scrolls, as it starts) |
 | `--theme <NAME>` | `midnight`, `aurora`, `ember`, `neon`, `mono` or `daylight` |
 | `--locale <LANG>` | `en`, `de` or `fr` |
 | `--scale <N>` | Enlarge by an integer factor (nearest neighbour) |

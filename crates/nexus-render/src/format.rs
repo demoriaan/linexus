@@ -12,6 +12,7 @@ pub fn value(value: f32, unit: Unit, fahrenheit: bool) -> (String, String) {
         Unit::Rpm => (format!("{value:.0}"), "RPM".into()),
         Unit::Megahertz if value >= 1000.0 => (format!("{:.2}", value / 1000.0), "GHz".into()),
         Unit::Megahertz => (format!("{value:.0}"), "MHz".into()),
+        Unit::Milliseconds => (milliseconds(value), "ms".into()),
         Unit::Bytes => {
             let (n, u) = scale_bytes(value);
             (n, u.into())
@@ -48,6 +49,15 @@ fn scale_bytes(value: f32) -> (String, &'static str) {
         format!("{v:.1}")
     };
     (text, UNITS[idx])
+}
+
+/// One decimal below 10 ms, where a tenth still matters.
+pub fn milliseconds(value: f32) -> String {
+    if value < 9.95 {
+        format!("{:.1}", value.max(0.1))
+    } else {
+        format!("{value:.0}")
+    }
 }
 
 fn compact(value: f32) -> String {
@@ -162,6 +172,31 @@ pub enum Word {
     AlreadyInChannel,
     TouchTheMark,
     PrivateCall,
+    Ping,
+    Router,
+    Jitter,
+    Loss,
+    Average,
+    Measuring,
+    NoReply,
+    UnknownHost,
+    /// Label of a breaking-news banner and headline.
+    Breaking,
+    /// `UnknownHost` where there is little room.
+    Unknown,
+    Level,
+    Input,
+    VoiceArriving,
+    Silent,
+    MutedForAllApps,
+    MicrophoneOn,
+    Camera,
+    InUseNow,
+    Close,
+    NoOutputs,
+    NoInputs,
+    NoAppSound,
+    SoundUnavailable,
 }
 
 pub fn word(word: Word, locale: Locale) -> &'static str {
@@ -251,6 +286,71 @@ pub fn word(word: Word, locale: Locale) -> &'static str {
         (Locale::En, PrivateCall) => "Private call",
         (Locale::De, PrivateCall) => "Privater Anruf",
         (Locale::Fr, PrivateCall) => "Appel privé",
+        (Locale::En | Locale::De | Locale::Fr, Ping) => "Ping",
+        (Locale::En | Locale::De, Router) => "Router",
+        (Locale::Fr, Router) => "Routeur",
+        (Locale::En | Locale::De, Jitter) => "Jitter",
+        (Locale::Fr, Jitter) => "Gigue",
+        (Locale::En, Average) => "Avg",
+        (Locale::De, Average) => "Ø",
+        (Locale::Fr, Average) => "Moy.",
+        (Locale::En, Loss) => "Loss",
+        (Locale::De, Loss) => "Verlust",
+        (Locale::Fr, Loss) => "Perte",
+        (Locale::En, Measuring) => "Measuring…",
+        (Locale::De, Measuring) => "Messung…",
+        (Locale::Fr, Measuring) => "Mesure…",
+        (Locale::En, NoReply) => "No reply",
+        (Locale::De, NoReply) => "Keine Antwort",
+        (Locale::Fr, NoReply) => "Pas de réponse",
+        (Locale::En, UnknownHost) => "Unknown host",
+        (Locale::De, UnknownHost) => "Unbekannter Host",
+        (Locale::Fr, UnknownHost) => "Hôte inconnu",
+        (Locale::En, Breaking) => "Breaking",
+        (Locale::De, Breaking) => "Eilmeldung",
+        (Locale::Fr, Breaking) => "Alerte",
+        (Locale::En, Unknown) => "Unknown",
+        (Locale::De, Unknown) => "Unbekannt",
+        (Locale::Fr, Unknown) => "Inconnu",
+        (Locale::En, Level) => "Level",
+        (Locale::De, Level) => "Pegel",
+        (Locale::Fr, Level) => "Niveau",
+        (Locale::En, Input) => "Input",
+        (Locale::De, Input) => "Eingang",
+        (Locale::Fr, Input) => "Entrée",
+        (Locale::En, VoiceArriving) => "Voice coming through",
+        (Locale::De, VoiceArriving) => "Stimme kommt an",
+        (Locale::Fr, VoiceArriving) => "La voix passe",
+        (Locale::En, Silent) => "silent",
+        (Locale::De, Silent) => "still",
+        (Locale::Fr, Silent) => "silence",
+        (Locale::En, MutedForAllApps) => "muted for all apps",
+        (Locale::De, MutedForAllApps) => "stumm für alle Apps",
+        (Locale::Fr, MutedForAllApps) => "coupé pour toutes les apps",
+        (Locale::En, MicrophoneOn) => "Mic on",
+        (Locale::De, MicrophoneOn) => "Mikro an",
+        (Locale::Fr, MicrophoneOn) => "Micro ouvert",
+        (Locale::En, Camera) => "Camera",
+        (Locale::De, Camera) => "Kamera",
+        (Locale::Fr, Camera) => "Caméra",
+        (Locale::En, InUseNow) => "IN USE NOW",
+        (Locale::De, InUseNow) => "GREIFEN GERADE ZU",
+        (Locale::Fr, InUseNow) => "ACCÈS EN COURS",
+        (Locale::En, Close) => "Close",
+        (Locale::De, Close) => "Schließen",
+        (Locale::Fr, Close) => "Fermer",
+        (Locale::En, NoOutputs) => "No sound outputs",
+        (Locale::De, NoOutputs) => "Keine Ausgabegeräte",
+        (Locale::Fr, NoOutputs) => "Aucune sortie audio",
+        (Locale::En, NoInputs) => "No microphone",
+        (Locale::De, NoInputs) => "Kein Mikrofon",
+        (Locale::Fr, NoInputs) => "Aucun micro",
+        (Locale::En, NoAppSound) => "No app is playing sound",
+        (Locale::De, NoAppSound) => "Keine App spielt Ton",
+        (Locale::Fr, NoAppSound) => "Aucune app ne joue de son",
+        (Locale::En, SoundUnavailable) => "PipeWire not reachable",
+        (Locale::De, SoundUnavailable) => "PipeWire nicht erreichbar",
+        (Locale::Fr, SoundUnavailable) => "PipeWire injoignable",
     }
 }
 

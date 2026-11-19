@@ -1,5 +1,8 @@
+mod alerts;
+pub mod audio;
 mod discord;
 mod feeds;
+mod formats;
 mod integrations;
 mod obs;
 mod providers;
@@ -7,7 +10,12 @@ mod refresh;
 pub use providers::battery::{read_batteries, BatteryReading};
 pub use providers::clock::{local_clock, LocalClock};
 
-pub use feeds::{cached_feed_titles, inspect_feed_url, FeedInspection};
+pub use alerts::{
+    alert_sources, keyword_matches, same_story, AlertItem, AlertSource, AlertState, BreakingNews,
+    ALERT_MAX_REFRESH_SECS, ALERT_WINDOW_SECS,
+};
+pub use feeds::{cached_feed_rates, cached_feed_titles, inspect_feed_url, FeedInspection};
+pub use formats::{items_per_day, FeedFormat};
 
 pub use discord::{
     authorize as discord_authorize, avatar_url as discord_avatar_url, discord_guilds,
@@ -42,6 +50,10 @@ pub use providers::notify::{
     Notification, NotificationIcon, NotificationMonitor, PopupPolicy, Urgency,
 };
 pub use providers::nvidia::present as nvidia_gpu_present;
+pub use providers::ping::{
+    default_gateway, probe_address, probe_timeout, PingMethod, PingMonitor, PingReading, PingStats,
+    WINDOW as PING_WINDOW,
+};
 pub use providers::weather::{
     fetch_weather, geocode, parse_forecast, parse_geocoding, GeoPlace, WeatherReport,
     WEATHER_ATTRIBUTION,
@@ -53,7 +65,7 @@ pub use integrations::{
 };
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::os::fd::AsRawFd;
@@ -746,21 +758,71 @@ impl NewsDisplayConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "StoredRssFeed")]
 pub struct RssFeedConfig {
     pub id: String,
     pub url: String,
-    #[serde(default = "default_rss_limit")]
     pub limit: usize,
-    #[serde(default = "default_rss_refresh_seconds")]
     pub refresh_seconds: u64,
-    #[serde(default = "default_show_mode")]
     pub show_mode: String,
-    #[serde(default)]
     pub priority: i32,
-    #[serde(default)]
     pub max_age_seconds: Option<u64>,
-    #[serde(default = "default_tap_behavior")]
     pub tap_behavior: String,
+    #[serde(skip_serializing_if = "FeedFormat::is_rss")]
+    pub format: FeedFormat,
+    /// New items show as a breaking-news banner.
+    pub alert: bool,
+    /// When set, only items whose title contains one of these fire.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub alert_keywords: Vec<String>,
+}
+
+/// A feed as sensors.json may hold it. Some defaults depend on the format:
+/// the tagesschau API is an alert source and is polled every two minutes
+/// unless the feed says otherwise.
+#[derive(Deserialize)]
+struct StoredRssFeed {
+    id: String,
+    url: String,
+    #[serde(default = "default_rss_limit")]
+    limit: usize,
+    refresh_seconds: Option<u64>,
+    #[serde(default = "default_show_mode")]
+    show_mode: String,
+    #[serde(default)]
+    priority: i32,
+    #[serde(default)]
+    max_age_seconds: Option<u64>,
+    #[serde(default = "default_tap_behavior")]
+    tap_behavior: String,
+    #[serde(default)]
+    format: FeedFormat,
+    alert: Option<bool>,
+    #[serde(default)]
+    alert_keywords: Vec<String>,
+}
+
+impl From<StoredRssFeed> for RssFeedConfig {
+    fn from(feed: StoredRssFeed) -> Self {
+        let tagesschau = feed.format == FeedFormat::Tagesschau;
+        Self {
+            id: feed.id,
+            url: feed.url,
+            limit: feed.limit,
+            refresh_seconds: feed.refresh_seconds.unwrap_or(if tagesschau {
+                120
+            } else {
+                default_rss_refresh_seconds()
+            }),
+            show_mode: feed.show_mode,
+            priority: feed.priority,
+            max_age_seconds: feed.max_age_seconds,
+            tap_behavior: feed.tap_behavior,
+            format: feed.format,
+            alert: feed.alert.unwrap_or(tagesschau),
+            alert_keywords: feed.alert_keywords,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -915,28 +977,67 @@ impl SensorModule for RssSensor {
 
     fn collect(&self, snapshot: &mut SensorSnapshot) {
         let seen_state = load_rss_seen_state();
-        for feed in &self.feeds {
-            let Some(mut channel) = collect_rss_feed(feed) else {
+        // A feed switched off is off: not downloaded, no headlines, no
+        // breaking news.
+        for feed in self.feeds.iter().filter(|feed| feed.show_mode != "hidden") {
+            let Some((channel, fetched)) = collect_rss_feed(feed) else {
                 continue;
             };
-            for item in &mut channel.items {
-                let title = item.title.as_deref().unwrap_or("RSS item");
-                item.id = rss_item_key(&feed.id, title, item.link.as_deref());
-                item.seen = seen_state.seen.contains(&item.id);
-                item.dismissed = seen_state.dismissed.contains(&item.id);
-            }
-            snapshot.metrics.sensor_records.push(SensorRecord {
-                module: self.id().into(),
-                kind: "rss_feed".into(),
-                label: channel.title.clone().unwrap_or_else(|| feed.id.clone()),
-                value: serde_json::json!({
-                    "id": feed.id,
-                    "url": feed.url,
-                    "title": channel.title,
-                    "items": channel.items,
-                }),
-            });
+            let record = rss_feed_record(feed, channel, fetched, &seen_state);
+            snapshot.metrics.sensor_records.push(record);
         }
+    }
+}
+
+/// A feed's record: its first `limit` items for the news widget and, for an
+/// alert feed, everything checked for breaking news (see `alert_sources`),
+/// with when it was downloaded.
+fn rss_feed_record(
+    feed: &RssFeedConfig,
+    mut channel: RssChannel,
+    fetched: u64,
+    seen_state: &RssSeenState,
+) -> SensorRecord {
+    for item in &mut channel.items {
+        let title = item.title.as_deref().unwrap_or("RSS item");
+        item.id = rss_item_key(&feed.id, title, item.link.as_deref());
+        item.seen = seen_state.seen.contains(&item.id);
+        item.dismissed = seen_state.dismissed.contains(&item.id);
+    }
+    let shown = &channel.items[..channel.items.len().min(feed.limit)];
+    let mut value = serde_json::json!({
+        "id": feed.id,
+        "url": feed.url,
+        "title": channel.title,
+        "items": shown,
+    });
+    if feed.alert {
+        let items: Vec<AlertItem> = channel
+            .items
+            .iter()
+            .filter_map(|item| {
+                Some(AlertItem {
+                    id: item.id.clone(),
+                    guid: item.guid.clone(),
+                    title: item.title.clone().filter(|t| !t.trim().is_empty())?,
+                    link: item.link.clone(),
+                    published: item.published,
+                })
+            })
+            .collect();
+        value["alert"] = serde_json::json!({
+            "keywords": feed.alert_keywords,
+            "opens": feed.tap_behavior != "none",
+            "flagged": feed.format == FeedFormat::Tagesschau,
+            "fetched": fetched,
+            "items": items,
+        });
+    }
+    SensorRecord {
+        module: "rss".into(),
+        kind: "rss_feed".into(),
+        label: channel.title.clone().unwrap_or_else(|| feed.id.clone()),
+        value,
     }
 }
 
@@ -1035,6 +1136,12 @@ pub struct RssItem {
     pub title: Option<String>,
     pub link: Option<String>,
     pub summary: Option<String>,
+    /// Publication time (unix seconds) when the feed gives one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published: Option<u64>,
+    /// The feed's own id of the item (RSS `guid`, Atom `id`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guid: Option<String>,
 }
 
 /// Largest webhook body that is stored; a status update is a few hundred
@@ -1286,9 +1393,14 @@ fn normalize_sensor_config(config: &mut SensorConfig) {
         }
         feed.limit = feed.limit.clamp(1, 10);
         feed.refresh_seconds = feed.refresh_seconds.max(60);
+        if feed.alert {
+            // Breaking news must not wait an hour for its feed.
+            feed.refresh_seconds = feed.refresh_seconds.min(ALERT_MAX_REFRESH_SECS);
+        }
         feed.show_mode = normalize_show_mode(&feed.show_mode);
         feed.tap_behavior = normalize_tap_behavior(&feed.tap_behavior);
         feed.max_age_seconds = feed.max_age_seconds.map(normalize_max_age_seconds);
+        feed.alert_keywords = alerts::normalize_keywords(&feed.alert_keywords);
     }
     config.rss = dedupe_feeds(std::mem::take(&mut config.rss));
     for webhook in &mut config.webhooks {
@@ -1501,6 +1613,9 @@ fn read_rss_feed_config() -> Vec<RssFeedConfig> {
                 priority: 0,
                 max_age_seconds: None,
                 tap_behavior: default_tap_behavior(),
+                format: FeedFormat::Rss,
+                alert: false,
+                alert_keywords: Vec::new(),
             });
         }
     }
@@ -1565,10 +1680,17 @@ fn sanitize_ifttt_event(event: &str) -> String {
         .collect::<String>()
 }
 
-const FEED_TIMEOUT: Duration = Duration::from_secs(5);
+/// Feeds run in the background; a big one (the tagesschau API is some
+/// 100 KB compressed) needs time on a slow line.
+const FEED_TIMEOUT: Duration = Duration::from_secs(20);
+const FEED_USER_AGENT: &str = concat!(
+    "Linexus/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/demoriaan/linexus)"
+);
 static FEED_REFRESH: refresh::Refresher = refresh::Refresher::new();
 
-fn collect_rss_feed(feed: &RssFeedConfig) -> Option<RssChannel> {
+fn collect_rss_feed(feed: &RssFeedConfig) -> Option<(RssChannel, u64)> {
     rss_channel_from_cache(
         feed,
         &rss_cache_path(feed),
@@ -1578,33 +1700,123 @@ fn collect_rss_feed(feed: &RssFeedConfig) -> Option<RssChannel> {
     )
 }
 
-/// Headlines from the on-disk cache. A cache older than the feed's refresh
-/// interval is replaced by a background download; until that succeeds
-/// (offline, feed down) the old headlines stay up.
+/// Headlines from the on-disk cache and when they were downloaded. A cache
+/// older than the feed's refresh interval is replaced by a background
+/// download; until that succeeds (offline, feed down) the old headlines
+/// stay up.
 fn rss_channel_from_cache<F>(
     feed: &RssFeedConfig,
     path: &Path,
     now: u64,
     refresher: &'static refresh::Refresher,
     fetch: F,
-) -> Option<RssChannel>
+) -> Option<(RssChannel, u64)>
 where
     F: FnOnce(&str, Duration) -> Option<String> + Send + 'static,
 {
-    let cached = read_rss_cache(path, &feed.url);
-    let fresh = cached
-        .as_ref()
-        .is_some_and(|(_, fetched_at)| now.saturating_sub(*fetched_at) <= feed.refresh_seconds);
+    // Alert feeds check more items than the widget shows; the collector
+    // trims the rest.
+    let scan = if feed.alert {
+        feed.limit.max(alerts::ALERT_SCAN)
+    } else {
+        feed.limit
+    };
+    let cached = cached_feed(path, &feed.url, feed.format, scan);
+    let fresh = cached.as_ref().is_some_and(|(_, fetched_at)| {
+        now.saturating_sub(*fetched_at)
+            <= feed.refresh_seconds + poll_jitter(&feed.url, *fetched_at, feed.refresh_seconds)
+    });
     if !fresh {
         let url = feed.url.clone();
         let path = path.to_path_buf();
+        let format = feed.format;
         let key = format!("{}\n{url}", path.display());
         refresher.start(&key, Instant::now(), move || {
+            // Only a feed replaces the cache: a network's login page, or
+            // any other page, counts as a failed download.
             fetch(&url, FEED_TIMEOUT)
+                .filter(|body| parse_feed_body(format, body, 0).is_some())
                 .is_some_and(|body| write_rss_cache(&path, &url, &body).is_ok())
         });
     }
-    parse_rss_channel(&cached?.0, feed.limit)
+    cached
+}
+
+/// Parsed feed caches by path. The collector runs every second, and the
+/// tagesschau answer alone is some 700 KB of JSON inside the cache's JSON,
+/// so a cache file is read and parsed again only after it changed.
+static PARSED_FEEDS: Mutex<BTreeMap<PathBuf, ParsedFeed>> = Mutex::new(BTreeMap::new());
+
+struct ParsedFeed {
+    /// Modification time and length of the file that was parsed.
+    stamp: (std::time::SystemTime, u64),
+    url: String,
+    format: FeedFormat,
+    scan: usize,
+    channel: Option<(RssChannel, u64)>,
+}
+
+/// The feed cached at `path` for `url`, its first `scan` items, and when it
+/// was downloaded.
+fn cached_feed(
+    path: &Path,
+    url: &str,
+    format: FeedFormat,
+    scan: usize,
+) -> Option<(RssChannel, u64)> {
+    let meta = fs::metadata(path).ok()?;
+    let stamp = (meta.modified().ok()?, meta.len());
+    let mut parsed = PARSED_FEEDS.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(hit) = parsed.get(path).filter(|hit| {
+        hit.stamp == stamp && hit.url == url && hit.format == format && hit.scan == scan
+    }) {
+        return hit.channel.clone();
+    }
+    let channel = read_rss_cache(path, url)
+        .and_then(|(body, fetched_at)| Some((parse_feed_body(format, &body, scan)?, fetched_at)));
+    parsed.insert(
+        path.to_path_buf(),
+        ParsedFeed {
+            stamp,
+            url: url.to_string(),
+            format,
+            scan,
+            channel: channel.clone(),
+        },
+    );
+    channel
+}
+
+/// Items of a downloaded feed in `format`. An HTML page has a `<title>`
+/// too, so for RSS and Atom only a feed document counts (see
+/// [`formats::is_feed_document`]), or a page that holds feed items; a feed
+/// without items is still a feed (one that brings only breaking news is
+/// empty most of the time).
+fn parse_feed_body(format: FeedFormat, body: &str, limit: usize) -> Option<RssChannel> {
+    match format {
+        FeedFormat::Rss => {
+            let mut channel = parse_rss_channel(body, limit.max(1)).unwrap_or_default();
+            if channel.items.is_empty() && !formats::is_feed_document(body) {
+                return None;
+            }
+            channel.items.truncate(limit);
+            Some(channel)
+        }
+        FeedFormat::Tagesschau => formats::parse_tagesschau(body, limit),
+    }
+}
+
+/// A few seconds added to a feed's refresh interval, different for every
+/// download, so feeds (and installs) do not all poll in step: up to a tenth
+/// of the interval, at most 30 s. It only ever delays a download.
+fn poll_jitter(url: &str, fetched_at: u64, refresh_seconds: u64) -> u64 {
+    let spread = (refresh_seconds / 10).min(30);
+    if spread == 0 {
+        return 0;
+    }
+    let key = rss_item_key("poll", url, Some(&fetched_at.to_string()));
+    let hash = u64::from_str_radix(key.rsplit(':').next().unwrap_or("0"), 16).unwrap_or(0);
+    hash % (spread + 1)
 }
 
 /// The cached body of the feed at `url` and when it was downloaded (unix
@@ -1668,8 +1880,12 @@ fn fetch_document(url: &str, timeout: Duration) -> Option<(String, String)> {
             "=http,https",
             "--max-time",
             &max_time,
+            // Feeds shrink to a quarter or less; the tagesschau API from
+            // 650 KB to about 100 KB.
+            "--compressed",
+            // Who asks, and where to read about it; nothing about the user.
             "--user-agent",
-            concat!("linexus/", env!("CARGO_PKG_VERSION")),
+            FEED_USER_AGENT,
             // stdout carries the body; the final URL goes to stderr, which
             // holds nothing else on success.
             "--write-out",
@@ -1741,6 +1957,12 @@ pub fn parse_rss_channel(input: &str, limit: usize) -> Option<RssChannel> {
             summary: tag_text(&item, "description")
                 .or_else(|| tag_text(&item, "summary"))
                 .or_else(|| tag_text(&item, "content")),
+            published: ["pubDate", "dc:date", "published", "updated"]
+                .iter()
+                .find_map(|tag| tag_text(&item, tag).and_then(|date| formats::parse_date(&date))),
+            guid: tag_text(&item, "guid")
+                .or_else(|| tag_text(&item, "id"))
+                .filter(|guid| !guid.is_empty()),
         });
     }
     if title.is_none() && items.is_empty() {
@@ -2922,6 +3144,9 @@ mod tests {
             priority: 0,
             max_age_seconds: None,
             tap_behavior: default_tap_behavior(),
+            format: FeedFormat::Rss,
+            alert: false,
+            alert_keywords: Vec::new(),
         };
         let display = NewsDisplayConfig {
             scroll_speed_px_per_sec: 999,
@@ -3790,10 +4015,14 @@ PID PPID COMMAND RSS %CPU COMMAND
             priority: 0,
             max_age_seconds: None,
             tap_behavior: default_tap_behavior(),
+            format: FeedFormat::Rss,
+            alert: false,
+            alert_keywords: Vec::new(),
         };
         let refresher: &'static refresh::Refresher = Box::leak(Box::new(refresh::Refresher::new()));
         let key = format!("{}\n{}", path.display(), feed.url);
-        let headline = |channel: Option<RssChannel>| channel.unwrap().items[0].title.clone();
+        let headline =
+            |channel: Option<(RssChannel, u64)>| channel.unwrap().0.items[0].title.clone();
         let calls = Arc::new(AtomicUsize::new(0));
         let counter = calls.clone();
         let offline = move |_: &str, _: Duration| {
@@ -3877,5 +4106,222 @@ PID PPID COMMAND RSS %CPU COMMAND
         assert!(!is_http_url("example.test/feed"));
         assert!(fetch_document("-K/tmp/curlrc", Duration::from_secs(1)).is_none());
         assert!(fetch_document("file:///etc/passwd", Duration::from_secs(1)).is_none());
+    }
+
+    #[test]
+    fn feeds_name_the_app_and_its_page_and_nothing_else() {
+        assert_eq!(
+            FEED_USER_AGENT,
+            format!(
+                "Linexus/{} (+https://github.com/demoriaan/linexus)",
+                env!("CARGO_PKG_VERSION")
+            )
+        );
+    }
+
+    #[test]
+    fn old_feed_entries_load_unchanged_and_alert_fields_have_format_defaults() {
+        let old: RssFeedConfig =
+            serde_json::from_str(r#"{"id": "news", "url": "https://example.test/feed.xml"}"#)
+                .unwrap();
+        assert_eq!(old.limit, 3);
+        assert_eq!(old.refresh_seconds, 900);
+        assert_eq!(old.format, FeedFormat::Rss);
+        assert!(!old.alert);
+        assert!(old.alert_keywords.is_empty());
+        let saved = serde_json::to_value(&old).unwrap();
+        assert!(saved.get("format").is_none());
+        assert!(saved.get("alert_keywords").is_none());
+        assert_eq!(saved["alert"], false);
+        assert_eq!(serde_json::from_value::<RssFeedConfig>(saved).unwrap(), old);
+
+        let api: RssFeedConfig = serde_json::from_str(
+            r#"{"id": "ts", "url": "https://www.tagesschau.de/api2u/homepage/", "format": "tagesschau"}"#,
+        )
+        .unwrap();
+        assert!(api.alert);
+        assert_eq!(api.refresh_seconds, 120);
+        let quiet: RssFeedConfig = serde_json::from_str(
+            r#"{"id": "ts", "url": "https://x.test/", "format": "tagesschau", "alert": false, "refresh_seconds": 30}"#,
+        )
+        .unwrap();
+        assert!(!quiet.alert);
+        let saved = serde_json::to_value(&quiet).unwrap();
+        assert_eq!(saved["format"], "tagesschau");
+        assert_eq!(
+            serde_json::from_value::<RssFeedConfig>(saved).unwrap(),
+            quiet
+        );
+
+        let mut config = SensorConfig {
+            rss: vec![RssFeedConfig {
+                alert_keywords: vec![" Köln ".into(), "köln".into(), " ".into()],
+                ..quiet
+            }],
+            ..SensorConfig::default()
+        };
+        normalize_sensor_config(&mut config);
+        assert_eq!(
+            config.rss[0].refresh_seconds, 60,
+            "never faster than a minute"
+        );
+        assert_eq!(config.rss[0].alert_keywords, ["Köln"]);
+    }
+
+    #[test]
+    fn breaking_news_feeds_are_checked_at_least_every_quarter_hour() {
+        let feed = |alert: bool| RssFeedConfig {
+            alert,
+            refresh_seconds: 4 * 3600,
+            ..serde_json::from_str(r#"{"id": "a", "url": "https://x.test/a"}"#).unwrap()
+        };
+        let mut config = SensorConfig {
+            rss: vec![
+                feed(true),
+                RssFeedConfig {
+                    id: "b".into(),
+                    url: "https://x.test/b".into(),
+                    ..feed(false)
+                },
+            ],
+            ..SensorConfig::default()
+        };
+        normalize_sensor_config(&mut config);
+        assert_eq!(config.rss[0].refresh_seconds, ALERT_MAX_REFRESH_SECS);
+        assert_eq!(config.rss[1].refresh_seconds, 4 * 3600);
+    }
+
+    #[test]
+    fn switched_off_feeds_are_not_fetched_and_bring_no_breaking_news() {
+        let hidden: RssFeedConfig = serde_json::from_str(
+            r#"{"id": "off", "url": "https://example.invalid/feed", "alert": true, "show_mode": "hidden"}"#,
+        )
+        .unwrap();
+        let mut snapshot = SensorSnapshot::default();
+        RssSensor::new(vec![hidden]).collect(&mut snapshot);
+        assert!(snapshot.metrics.sensor_records.is_empty());
+    }
+
+    #[test]
+    fn only_a_feed_replaces_the_cache_and_an_unchanged_cache_is_parsed_once() {
+        let dir = test_dir("rss-cache-pages");
+        let path = dir.join("news.json");
+        let feed = RssFeedConfig {
+            refresh_seconds: 900,
+            ..serde_json::from_str(r#"{"id": "news", "url": "https://example.test/f.xml"}"#)
+                .unwrap()
+        };
+        let refresher: &'static refresh::Refresher = Box::leak(Box::new(refresh::Refresher::new()));
+        let key = format!("{}\n{}", path.display(), feed.url);
+        let body = |title: &str| {
+            format!(
+                "<rss><channel><title>T</title><item><title>{title}</title></item></channel></rss>"
+            )
+        };
+        let title = |cached: Option<(RssChannel, u64)>| cached.unwrap().0.items[0].title.clone();
+        write_rss_cache(&path, &feed.url, &body("Old")).unwrap();
+        let fetched = read_rss_cache(&path, &feed.url).unwrap().1;
+
+        // Stale, and the network answers with its login page: the feed stays.
+        let later = fetched + 1000;
+        let login = |_: &str, _: Duration| Some("<html><title>Hotel WLAN</title></html>".into());
+        let cached = rss_channel_from_cache(&feed, &path, later, refresher, login);
+        assert_eq!(title(cached).as_deref(), Some("Old"));
+        refresh::wait_until_idle(refresher, &key);
+        assert!(read_rss_cache(&path, &feed.url)
+            .unwrap()
+            .0
+            .contains("<rss>"));
+
+        // The file as it was is not read again: the same size and time give
+        // the parsed feed from before, even though the bytes changed.
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        let text = fs::read_to_string(&path).unwrap().replace("Old", "New");
+        fs::write(&path, text).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        let none = |_: &str, _: Duration| None;
+        let cached = rss_channel_from_cache(&feed, &path, fetched, refresher, none);
+        assert_eq!(title(cached).as_deref(), Some("Old"));
+        write_rss_cache(&path, &feed.url, &body("Newer")).unwrap();
+        let cached = rss_channel_from_cache(&feed, &path, fetched, refresher, none);
+        assert_eq!(title(cached).as_deref(), Some("Newer"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rss_items_carry_their_date_and_guid() {
+        let feed = r#"<rss><channel><title>T</title>
+            <item><title>A</title><guid isPermaLink="false">id-1</guid>
+              <pubDate>Thu, 19 Nov 2026 14:03:00 +0100</pubDate></item>
+            <item><title>B</title><dc:date>2026-11-19T13:03:00Z</dc:date></item>
+            <item><title>C</title><pubDate>sometime</pubDate></item>
+          </channel></rss>"#;
+        let items = parse_rss_channel(feed, 10).unwrap().items;
+        assert_eq!(items[0].published, Some(1_795_093_380));
+        assert_eq!(items[0].guid.as_deref(), Some("id-1"));
+        assert_eq!(items[1].published, Some(1_795_093_380));
+        assert_eq!(items[1].guid, None);
+        assert_eq!(items[2].published, None);
+        let atom = r#"<feed><title>A</title><entry><title>E</title><id>urn:e:1</id>
+            <updated>2026-11-19T14:03:00+01:00</updated></entry></feed>"#;
+        let entry = &parse_rss_channel(atom, 10).unwrap().items[0];
+        assert_eq!(entry.published, Some(1_795_093_380));
+        assert_eq!(entry.guid.as_deref(), Some("urn:e:1"));
+    }
+
+    #[test]
+    fn poll_jitter_only_delays_and_stays_small() {
+        let jitters: Vec<u64> = (0..200)
+            .map(|i| poll_jitter("https://example.test/feed", 1_795_093_380 + i * 120, 120))
+            .collect();
+        assert!(jitters.iter().all(|&j| j <= 12));
+        assert!(jitters.iter().any(|&j| j != jitters[0]), "never varies");
+        assert!((0..50).all(|i| poll_jitter("u", i, 3600) <= 30));
+        assert_eq!(poll_jitter("u", 7, 5), 0);
+    }
+
+    #[test]
+    fn alert_feeds_hand_over_more_items_than_the_widget_shows() {
+        let items: String = (0..8)
+            .map(|i| format!("<item><title>Item {i}</title><guid>g{i}</guid></item>"))
+            .collect();
+        let body = format!("<rss><channel><title>Feed</title>{items}</channel></rss>");
+        let mut feed: RssFeedConfig =
+            serde_json::from_str(r#"{"id": "news", "url": "https://example.test/f", "limit": 2}"#)
+                .unwrap();
+        let plain = parse_feed_body(feed.format, &body, feed.limit).unwrap();
+        let record = rss_feed_record(&feed, plain, 7, &RssSeenState::default());
+        assert_eq!(record.value["items"].as_array().unwrap().len(), 2);
+        assert!(alert_sources(&[record]).is_empty());
+
+        feed.alert = true;
+        feed.alert_keywords = vec!["item".into()];
+        feed.tap_behavior = "none".into();
+        let scanned = parse_feed_body(feed.format, &body, alerts::ALERT_SCAN).unwrap();
+        let record = rss_feed_record(&feed, scanned, 7, &RssSeenState::default());
+        assert_eq!(record.value["items"].as_array().unwrap().len(), 2);
+        let sources = alert_sources(&[record]);
+        assert_eq!(sources.len(), 1);
+        let source = &sources[0];
+        assert_eq!((source.id.as_str(), source.name.as_str()), ("news", "Feed"));
+        assert_eq!(source.items.len(), 8);
+        assert_eq!(source.keywords, ["item"]);
+        assert!(!source.opens);
+        assert!(!source.flagged);
+        assert_eq!(source.fetched, 7);
+        feed.format = FeedFormat::Tagesschau;
+        let record = rss_feed_record(&feed, RssChannel::default(), 7, &RssSeenState::default());
+        assert!(alert_sources(&[record])[0].flagged);
+        assert_eq!(
+            source.items[7].id,
+            rss_item_key("news", "Item 7", None),
+            "the headline's own card id"
+        );
+        assert_eq!(source.items[7].guid.as_deref(), Some("g7"));
     }
 }

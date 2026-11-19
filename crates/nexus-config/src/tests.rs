@@ -1,6 +1,8 @@
 use super::*;
 use nexus_actions::{Action, VolumeCommand};
 
+mod ping;
+
 #[test]
 fn default_config_is_valid_and_round_trips() {
     let config = default_config();
@@ -775,6 +777,40 @@ fn touch_correction_shifts_reported_touches() {
         assert!(matches!(
             validate(&config),
             Err(ConfigError::InvalidTouchCorrection { .. })
+        ));
+    }
+}
+
+#[test]
+fn breaking_news_banners_default_on_and_bound_their_time() {
+    let config = default_config();
+    assert!(config.settings.overlays.alerts);
+    assert_eq!(config.settings.overlays.alert_duration_ms, 20_000);
+
+    // A config from before the banners loads unchanged and gets them on.
+    let mut old = serde_json::to_value(default_config()).unwrap();
+    old["settings"]["overlays"] = serde_json::json!({ "volume": false, "now_playing": true });
+    let (loaded, report) = parse(&old.to_string()).unwrap();
+    assert!(report.is_none());
+    validate(&loaded).unwrap();
+    assert!(!loaded.settings.overlays.volume);
+    assert!(loaded.settings.overlays.alerts);
+    assert_eq!(loaded.settings.overlays.alert_duration_ms, 20_000);
+    let mut bare = serde_json::to_value(default_config()).unwrap();
+    bare["settings"].as_object_mut().unwrap().remove("overlays");
+    let (loaded, _) = parse(&bare.to_string()).unwrap();
+    assert_eq!(loaded.settings.overlays, OverlaySettings::default());
+
+    let mut config = default_config();
+    for ok in [*ALERT_DURATION_MS.start(), 60_000, *ALERT_DURATION_MS.end()] {
+        config.settings.overlays.alert_duration_ms = ok;
+        validate(&config).unwrap();
+    }
+    for bad in [0, 4_999, 120_001] {
+        config.settings.overlays.alert_duration_ms = bad;
+        assert!(matches!(
+            validate(&config),
+            Err(ConfigError::InvalidAlertDuration { duration_ms }) if duration_ms == bad
         ));
     }
 }

@@ -126,6 +126,7 @@ Some touches do not reach widgets:
 
 - While the strip is dimmed with "First touch only wakes" switched on, or turned off by the idle timer or a "Turn the strip off" action, the first touch only wakes it.
 - While a notification, volume or track pop-up is shown, a touch closes it.
+- While a breaking-news banner is shown, a tap opens the article and closes the banner, and holding closes it without opening.
 - While the strip calibrates its touches, touches measure the panel instead.
 
 ### Actions
@@ -227,8 +228,9 @@ The focus watcher does not run in emulator mode.
 
 The News section manages the sources of the Headlines widget. Changes save on their own.
 
-- **Add a source**: type a website or feed address and choose **Find feed**. Studio looks for the feed and lists more feeds the page links. A list of suggestions is offered below the field.
-- **Your sources**: each source has an on/off switch, **Latest headlines** to check it, the number of headlines it contributes, how often it updates (5 minutes to 4 hours), its order (First, Normal, Last) and what a tap does (open the article, or nothing). Arrows reorder sources.
+- **Add a source**: type a website or feed address and choose **Find feed**. Studio looks for the feed, says about how many items a day it brings and lists more feeds the page links. Suggestions in German, English and French are offered below the field, those in Studio's language first. Sources marked with a siren (tagesschau and SPIEGEL breaking news) are added as breaking-news sources. No free English or French source marks breaking news, so there you pick a feed and add keywords.
+- **Your sources**: each source has an on/off switch (off, the source is not fetched at all: no headlines, no breaking news, no banners), **Latest headlines** to check it, the number of headlines it contributes, how often it updates (1 minute to 4 hours), its order (First, Normal, Last) and what a tap does (open the article, or nothing). Arrows reorder sources.
+- **Show as breaking news**: new headlines of the source appear as a banner across the strip and head the Headlines widget for an hour. Such a source is checked at least every 15 minutes, so the longer intervals are not offered while this is on. A breaking-news source with nothing to report is empty; Studio says so when you add or check it. **Only with these words** limits that to headlines containing one of the keywords, separated by commas (whole words, case does not matter, a `*` at the end also matches longer words). A source that brings more than about 20 items a day without keywords gets a warning. The rules are in [configuration.md](configuration.md#news-feeds-and-breaking-news).
 - **Movement**: scroll speed for long headlines, pauses before and after scrolling, the minimum time a pair of headlines stays, and the hold time that hides a headline. **Reset** restores the defaults.
 - **Read headlines**: mark the current headlines as read, or all as unread. Unread headlines come first.
 
@@ -255,6 +257,7 @@ Search a place to set the default location for weather widgets. Weather data com
 - **Show for up to** sets how long a message stays (2 to 15 seconds). A notification that asks for less time, such as a short status message, leaves sooner.
 - **Never show from** takes application names, separated by commas: the name shown on the strip, the app's menu name or its desktop file id.
 - **Show volume changes** and **Show new tracks** control the short pop-ups for volume and track changes.
+- **Show breaking news** turns the banners of breaking-news sources on or off, and **Show for** sets how long one stays (5 to 120 seconds). A banner goes above notifications, which wait for it. Off, breaking news only heads the Headlines widget.
 - **Show a test message** sends a message to the strip.
 
 ### Incoming webhooks

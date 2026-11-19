@@ -1,6 +1,7 @@
 //! One renderer per widget type. Each draws into its own X range of the
 //! strip and reads only configuration, live data and interaction state.
 
+mod audio_output;
 mod button;
 mod clock;
 mod discord;
@@ -8,8 +9,13 @@ mod discord_call;
 mod entity;
 mod media;
 mod metric;
+mod microphone;
+mod mixer;
 mod network;
 pub mod news;
+mod ping;
+pub(crate) mod privacy;
+pub(crate) mod sound;
 pub(crate) mod text;
 mod timer;
 mod volume;
@@ -25,6 +31,11 @@ use nexus_config::{Widget, WidgetKind};
 pub use discord::discord_channel_at;
 pub use discord_call::{discord_call_hit, CallHit};
 pub use media::{media_zone, MediaZone};
+pub use microphone::{lit_segments, segment_color, SEGMENTS};
+pub use mixer::mixer_apps;
+pub use ping::ping_key;
+pub use privacy::{privacy_hit, privacy_pill, PrivacyHit};
+pub use sound::{sound_hit, sound_pages, Slider, SoundHit};
 pub use volume::volume_fraction_at;
 pub use weather::weather_key;
 
@@ -88,6 +99,10 @@ pub fn draw(canvas: &mut Canvas, widget: &Widget, ctx: &Ctx) {
         WidgetKind::Command(props) => text::draw_command(canvas, bounds, widget, props, ctx),
         WidgetKind::DiscordVoice(props) => discord::draw(canvas, bounds, widget, props, ctx),
         WidgetKind::DiscordCall(props) => discord_call::draw(canvas, bounds, widget, props, ctx),
+        WidgetKind::Ping(props) => ping::draw(canvas, bounds, widget, props, ctx),
+        WidgetKind::AudioOutput(props) => audio_output::draw(canvas, bounds, widget, props, ctx),
+        WidgetKind::Mixer(props) => mixer::draw(canvas, bounds, widget, props, ctx),
+        WidgetKind::Microphone(props) => microphone::draw(canvas, bounds, widget, props, ctx),
         WidgetKind::Spacer => {}
     }
     canvas.unclip();
@@ -122,6 +137,7 @@ pub(crate) fn metric_icon(source: &str) -> &'static str {
         ("cpu", _) => "cpu",
         ("gpu", _) => "gpu",
         ("ram" | "swap", _) => "memory-stick",
+        ("net", rest) if rest == "ping" || rest.starts_with("ping.") => "radar",
         ("net", "down") => "arrow-down",
         ("net", "up") => "arrow-up",
         ("disk", _) => "hard-drive",

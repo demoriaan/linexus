@@ -83,6 +83,10 @@ pub(crate) enum OverlayArg {
     Volume,
     /// A new track.
     Track,
+    /// A breaking-news banner.
+    Alert,
+    /// A breaking-news banner whose headline scrolls (as it starts).
+    AlertLong,
 }
 
 impl OverlayArg {
@@ -91,6 +95,8 @@ impl OverlayArg {
             Self::Notification => "notification",
             Self::Volume => "volume",
             Self::Track => "track",
+            Self::Alert => "alert",
+            Self::AlertLong => "alert-long",
         }
     }
 
@@ -99,6 +105,8 @@ impl OverlayArg {
             Self::Notification => preview::sample_notification(live.locale),
             Self::Volume => Overlay::Volume(live.volume.unwrap_or_default()),
             Self::Track => Overlay::NowPlaying(Box::new(live.media.clone().unwrap_or_default())),
+            Self::Alert => preview::sample_alert(live.locale, false),
+            Self::AlertLong => preview::sample_alert(live.locale, true),
         }
     }
 }
@@ -233,6 +241,11 @@ pub(crate) fn render_config_page(
     live.hour12 = config.settings.hour12;
     live.fahrenheit = config.settings.temperature_unit == TemperatureUnit::Fahrenheit;
     fill_sample_for_page(&mut live, page);
+    // The sample probes of widgets without a host of their own are named
+    // after the config's default host.
+    if let Some(sample) = live.ping.get_mut("") {
+        sample.host = config.settings.ping.host.clone();
+    }
     let ui = UiState {
         page_index: visible.iter().position(|p| p.id == page.id).unwrap_or(0),
         page_count: visible.len(),
@@ -286,6 +299,7 @@ fn fill_sample_for_page(live: &mut nexus_render::LiveData, page: &Page) {
             _ => {}
         }
     }
+    preview::fill_ping_samples(live, page);
 }
 
 /// The pomodoro sample, or a running countdown or stopwatch as the daemon

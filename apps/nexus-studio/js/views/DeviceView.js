@@ -6,7 +6,7 @@ import { t, hasText } from "../lib/i18n.js";
 import { Icon } from "../lib/icons.js";
 import { config, edit, daemon, health, refreshDaemon, refreshHealth, toast } from "../lib/store.js";
 import { Switch, Segmented } from "../components/Dialog.js";
-import { Field } from "../components/Fields.js";
+import { Field, NumberInput, PingHostField } from "../components/Fields.js";
 
 export function DeviceView() {
   useEffect(() => { refreshHealth(); }, []);
@@ -113,8 +113,26 @@ function Behaviour() {
         <//>
         <div class="field inline"><span>${t("behaviour.lock")}</span><${Switch} ariaLabel=${t("behaviour.lock")} checked=${idle.blank_when_locked} onChange=${(blank_when_locked) => setIdle({ blank_when_locked })} /></div>
         <${TouchCorrection} />
+        <${PingSettings} />
       </div>
     </section>`;
+}
+
+/** The host ping widgets and the `net.ping` readings use by default. */
+function PingSettings() {
+  const ping = { host: "1.1.1.1", interval_ms: 1000, ...config.value.settings.ping };
+  const set = (patch, coalesce) => edit((d) => { d.settings.ping = { ...ping, ...d.settings.ping, ...patch }; }, { coalesce });
+  return html`
+    <hr class="divider" />
+    <div class="field"><span>${t("ping.title")}</span><small>${t("ping.hint")}</small></div>
+    <div class="two">
+      <${Field} label=${t("ping.host")}>
+        <${PingHostField} value=${ping.host} onChange=${(host) => set({ host: host ?? "" }, "ping-host")} />
+      <//>
+      <${Field} label=${t("ping.interval")}>
+        <${NumberInput} value=${ping.interval_ms} min=${250} max=${60000} step=${250} onInput=${(interval_ms) => set({ interval_ms }, "ping-interval")} />
+      <//>
+    </div>`;
 }
 
 /**

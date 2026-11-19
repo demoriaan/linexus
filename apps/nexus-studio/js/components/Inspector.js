@@ -5,15 +5,16 @@ import { t } from "../lib/i18n.js";
 import { Icon, IconRef } from "../lib/icons.js";
 import {
   profile, page, widget, selectedWidgetId, selectedPageId, edit, withPage, profileIndex,
-  limits, freeGaps, uniqueId, themes, STRIP_W, MIN_W,
+  limits, freeGaps, uniqueId, themes, config, STRIP_W, MIN_W,
 } from "../lib/store.js";
 import { WIDGETS, BUILTIN, widgetTitle } from "../widgets.js";
 import { ConfirmButton, Switch, Dialog } from "./Dialog.js";
 import {
   Field, TextInput, NumberInput, Select, IconField, MetricField, LocationField, EntityField,
-  ImageField, ArgsField, AppList, useApps, DiscordGuildField,
+  ImageField, ArgsField, AppList, useApps, DiscordGuildField, PingHostField,
 } from "./Fields.js";
 import { ActionEditor } from "./ActionEditor.js";
+import { PinnedAppsField } from "./SoundFields.js";
 import { api } from "../lib/api.js";
 
 function editWidget(patch, coalesce) {
@@ -116,6 +117,14 @@ function PropField({ field, w }) {
       return html`<${Field} label=${label} hint=${t("prop.args.hint")}><${ArgsField} value=${value} onChange=${set} /><//>`;
     case "feeds":
       return html`<${FeedsField} value=${value ?? []} onChange=${set} label=${label} />`;
+    case "ping_host":
+      return html`<${Field} label=${label} hint=${t("prop.ping.host.hint")}>
+        <${PingHostField} key=${w.id} value=${value} optional=${field.optional} defaultHost=${config.value.settings.ping?.host ?? "1.1.1.1"} onChange=${set} />
+      <//>`;
+    case "pinned_apps":
+      return html`<${Field} group label=${label} hint=${t("prop.mixer.pinned.hint")}>
+        <${PinnedAppsField} value=${value} onChange=${(apps) => set(apps.length ? apps : null)} />
+      <//>`;
     case "discord_guild":
       return html`<${Field} label=${label} hint=${t("prop.discord_voice.guild_id.hint")}>
         <${DiscordGuildField} value=${value} name=${w.guild_name}

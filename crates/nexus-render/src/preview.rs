@@ -188,6 +188,7 @@ pub fn sample_live(locale: Locale) -> LiveData {
         }),
         ..DiscordInfo::default()
     });
+    live.audio = Some(sample_audio(locale));
     live.timers.insert(
         "timer".into(),
         TimerInfo {
@@ -199,22 +200,198 @@ pub fn sample_live(locale: Locale) -> LiveData {
             rounds: 4,
         },
     );
+    let ping = sample_ping(nexus_config::DEFAULT_PING_HOST);
+    // The readings the daemon reports for the settings host, with its
+    // full scales.
+    for (id, value, unit, label, max) in [
+        ("net.ping", ping.last_ms, Unit::Milliseconds, "Ping", 200.0),
+        (
+            "net.ping.jitter",
+            ping.jitter_ms,
+            Unit::Milliseconds,
+            "Jitter",
+            50.0,
+        ),
+        (
+            "net.ping.loss",
+            ping.loss_percent,
+            Unit::Percent,
+            "Packet loss",
+            100.0,
+        ),
+    ] {
+        let value = value.unwrap_or_default();
+        let history = if id == "net.ping" {
+            ping.history.iter().flatten().copied().collect()
+        } else {
+            vec![value; 40]
+        };
+        live.history.insert(id.into(), history);
+        live.metrics.insert(
+            id.into(),
+            Metric {
+                value,
+                unit,
+                label: label.into(),
+                max,
+            },
+        );
+    }
+    live.ping.insert(String::new(), ping);
     live.news = NewsInfo {
         rows: vec![
             NewsRow {
                 source: "Linexus".into(),
                 headline: "Tap a headline to open it, hold it to hide it".into(),
                 seen: false,
+                alert: false,
             },
             NewsRow {
                 source: "Weather".into(),
                 headline: "Clear skies and mild temperatures for the weekend".into(),
                 seen: true,
+                alert: false,
             },
         ],
         ..NewsInfo::default()
     };
     live
+}
+
+/// A minute of probes around 14 ms with one lost, as the daemon reports
+/// them for `host`.
+pub fn sample_ping(host: &str) -> PingInfo {
+    let history: Vec<Option<f32>> = (0..60)
+        .map(|i| {
+            let t = i as f32;
+            let rtt = 14.0
+                + (t * 0.45).sin() * 1.6
+                + (t * 1.7).sin() * 0.9
+                + if i == 33 { 9.0 } else { 0.0 };
+            (i != 41).then_some(rtt)
+        })
+        .collect();
+    let answered: Vec<f32> = history.iter().flatten().copied().collect();
+    let steps: f32 = answered.windows(2).map(|w| (w[1] - w[0]).abs()).sum();
+    PingInfo {
+        host: host.into(),
+        last_ms: answered.last().copied(),
+        avg_ms: Some(answered.iter().sum::<f32>() / answered.len() as f32),
+        min_ms: answered.iter().copied().reduce(f32::min),
+        max_ms: answered.iter().copied().reduce(f32::max),
+        jitter_ms: Some(steps / (answered.len() - 1) as f32),
+        loss_percent: Some(100.0 / history.len() as f32),
+        history,
+        ..PingInfo::default()
+    }
+}
+
+/// Gives ping widgets with a host of their own the sample probes too; the
+/// sample data only has the default host.
+pub fn fill_ping_samples(live: &mut LiveData, page: &nexus_config::Page) {
+    for widget in &page.widgets {
+        if let nexus_config::WidgetKind::Ping(props) = &widget.kind {
+            let key = crate::ping_key(props);
+            if !live.ping.contains_key(key) {
+                live.ping.insert(key.to_string(), sample_ping(key));
+            }
+        }
+    }
+}
+
+/// A desk with a headset, a screen and speakers, four apps playing and the
+/// headset's microphone in use, named in `locale`.
+pub fn sample_audio(locale: Locale) -> AudioInfo {
+    let device = |node: &str, name: &str, detail: &str, kind: AudioKind, volume: u8| AudioDevice {
+        node: node.into(),
+        name: name.into(),
+        detail: detail.into(),
+        kind,
+        volume,
+        muted: false,
+    };
+    let app = |name: &str, volume: u8, muted: bool| AudioApp {
+        name: name.into(),
+        volume,
+        muted,
+    };
+    let [game, chat, screen, speakers, mic, line_in, board] = sample_devices(locale);
+    AudioInfo {
+        outputs: vec![
+            device("a50.game", game, "Astro A50", AudioKind::Headset, 60),
+            device("a50.chat", chat, "Astro A50", AudioKind::Headset, 45),
+            device("hdmi", screen, "Navi 10 HDMI", AudioKind::Monitor, 80),
+            device("spdif", speakers, "S/PDIF", AudioKind::Speaker, 35),
+        ],
+        inputs: vec![
+            device("a50.mic", mic, "Astro A50", AudioKind::Microphone, 80),
+            device("analog", line_in, board, AudioKind::Microphone, 100),
+        ],
+        default_output: Some("a50.game".into()),
+        default_input: Some("a50.mic".into()),
+        apps: vec![
+            app("Firefox", 70, true),
+            app("Discord", 100, false),
+            app("Spotify", 55, false),
+            app("Valheim", 80, false),
+        ],
+        level: Some(46),
+        ..AudioInfo::default()
+    }
+}
+
+/// The sample's device names: the headset's game and chat outputs, the
+/// screen, the speakers, the headset's microphone, the line in and the
+/// board it is on.
+fn sample_devices(locale: Locale) -> [&'static str; 7] {
+    match locale {
+        Locale::En => [
+            "A50 Game",
+            "A50 Chat",
+            "Monitor",
+            "Speakers",
+            "A50 Mic",
+            "Line in",
+            "Motherboard",
+        ],
+        Locale::De => [
+            "A50 Spiel",
+            "A50 Unterhaltung",
+            "Monitor",
+            "Lautsprecher",
+            "A50 Mikro",
+            "Analog-Eingang",
+            "Mainboard",
+        ],
+        Locale::Fr => [
+            "A50 Jeu",
+            "A50 Discussion",
+            "Écran",
+            "Enceintes",
+            "Micro A50",
+            "Entrée ligne",
+            "Carte mère",
+        ],
+    }
+}
+
+/// Discord on the microphone and OBS on the camera, for the privacy pill.
+pub fn sample_privacy(locale: Locale) -> PrivacyInfo {
+    PrivacyInfo {
+        uses: vec![
+            PrivacyEntry {
+                app: "Discord".into(),
+                camera: false,
+                device: sample_devices(locale)[4].into(),
+            },
+            PrivacyEntry {
+                app: "OBS Studio".into(),
+                camera: true,
+                device: "Droidcam".into(),
+            },
+        ],
+        ..PrivacyInfo::default()
+    }
 }
 
 /// A desktop notification as the strip shows it, for documentation
@@ -244,6 +421,38 @@ pub fn sample_notification(locale: Locale) -> Overlay {
         icon: None,
         link: None,
         scroll: false,
+    }
+}
+
+/// A breaking-news banner with a made-up headline that fits (`long` false)
+/// or scrolls, for previews and documentation screenshots.
+pub fn sample_alert(locale: Locale, long: bool) -> Overlay {
+    let (source, short, long_headline) = match locale {
+        Locale::De => (
+            "Stadtinfo",
+            "Brücke nach Sturmschäden wieder frei",
+            "Stromausfall in mehreren Stadtteilen: Der Versorger rechnet mit einer Reparatur \
+             bis zum späten Abend und bittet um Geduld",
+        ),
+        Locale::Fr => (
+            "Info Ville",
+            "Le pont rouvre après la tempête",
+            "Coupure de courant dans plusieurs quartiers : le fournisseur prévoit des \
+             réparations jusqu'en fin de soirée et appelle à la patience",
+        ),
+        Locale::En => (
+            "City News",
+            "Bridge reopens after storm damage",
+            "Power cut across several districts: the utility expects repairs to last into \
+             the late evening and asks residents for patience",
+        ),
+    };
+    Overlay::Alert {
+        source: source.into(),
+        headline: if long { long_headline } else { short }.into(),
+        link: None,
+        id: "rss:sample:alert".into(),
+        marquee: MarqueeStyle::default(),
     }
 }
 

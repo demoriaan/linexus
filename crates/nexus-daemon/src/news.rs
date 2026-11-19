@@ -13,6 +13,15 @@ const MIN_PAIR_DWELL: Duration = Duration::from_millis(5_000);
 /// Fastest frame interval while a headline scrolls (~33 fps).
 const MIN_SCROLL_FRAME: Duration = Duration::from_millis(30);
 
+/// The configured headline marquee (news widget and breaking-news banners).
+pub(crate) fn marquee_style(display: &nexus_sensors::NewsDisplayConfig) -> MarqueeStyle {
+    MarqueeStyle {
+        speed_px_per_sec: display.scroll_speed_px_per_sec.max(1),
+        start_pause_ms: u64::from(display.start_pause_ms),
+        end_pause_ms: u64::from(display.end_pause_ms),
+    }
+}
+
 /// Headline pacing from the sensor config, as the rotation and renderer use it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Pacing {
@@ -46,11 +55,7 @@ impl Pacing {
         widget_w: u16,
     ) -> Self {
         Self {
-            marquee: MarqueeStyle {
-                speed_px_per_sec: display.scroll_speed_px_per_sec.max(1),
-                start_pause_ms: u64::from(display.start_pause_ms),
-                end_pause_ms: u64::from(display.end_pause_ms),
-            },
+            marquee: marquee_style(display),
             min_pair: Duration::from_millis(u64::from(display.min_pair_ms)),
             hold: Duration::from_millis(u64::from(display.hold_to_dismiss_ms)),
             font,
@@ -297,6 +302,14 @@ impl SensorState {
         self.rotation.scrub(cards, pairs, now);
     }
 
+    /// Starts over with the first pair (breaking news just came in), unless
+    /// a finger is on the widget.
+    pub(crate) fn show_first(&mut self, cards: &[SensorCard], now: Instant) {
+        if self.touched.is_none() && !cards.is_empty() {
+            self.rotation.show_from(cards, 0, now);
+        }
+    }
+
     fn highlight_slot(&self, now: Instant) -> Option<usize> {
         self.highlight
             .filter(|(_, at)| now.saturating_duration_since(*at) < TAP_HIGHLIGHT)
@@ -327,6 +340,7 @@ impl SensorState {
                     source: card.source.clone(),
                     headline: card.title.clone(),
                     seen: card.status.as_deref() == Some("SEEN"),
+                    alert: card.status.as_deref() == Some(crate::alerts::ALERT_STATUS),
                 })
                 .collect(),
             marquee_phase_ms: phase,

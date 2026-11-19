@@ -118,7 +118,11 @@ pub fn render_png(request: &PreviewRequest, readings: Option<&[MetricReading]>) 
     if let Some(settings) = &request.settings {
         live.hour12 = settings.hour12;
         live.fahrenheit = settings.temperature_unit == TemperatureUnit::Fahrenheit;
+        if let Some(sample) = live.ping.get_mut("") {
+            sample.host = settings.ping.host.clone();
+        }
     }
+    nexus_render::preview::fill_ping_samples(&mut live, &request.page);
     if let Some(readings) = readings {
         overlay_readings(&mut live, readings);
     }
@@ -177,6 +181,7 @@ fn unit_from_name(name: &str) -> Unit {
         "bytes" => Unit::Bytes,
         "bytes_per_sec" => Unit::BytesPerSec,
         "megahertz" => Unit::Megahertz,
+        "milliseconds" => Unit::Milliseconds,
         _ => Unit::Plain,
     }
 }
@@ -190,6 +195,7 @@ fn unit_name(unit: Unit) -> &'static str {
         Unit::Bytes => "bytes",
         Unit::BytesPerSec => "bytes_per_sec",
         Unit::Megahertz => "megahertz",
+        Unit::Milliseconds => "milliseconds",
         Unit::Plain => "plain",
     }
 }
@@ -280,6 +286,45 @@ mod tests {
             let image = decode(&response.body);
             assert_eq!(image.dimensions(), (640, 48), "{template:?}");
         }
+    }
+
+    #[test]
+    fn ping_widgets_preview_with_sample_probes_for_any_host() {
+        let page = |host: Option<&str>| {
+            let mut page = nexus_config::template_page(PageTemplate::Launcher, "p");
+            page.widgets = vec![nexus_config::Widget::new(
+                "ping",
+                0,
+                300,
+                nexus_config::WidgetKind::Ping(nexus_config::PingProps {
+                    host: host.map(Into::into),
+                    ..Default::default()
+                }),
+            )];
+            page
+        };
+        let mut settings = Settings::default();
+        settings.ping.host = "9.9.9.9".into();
+        let render = |page: Page, settings: Option<Settings>| {
+            let request = PreviewRequest {
+                page,
+                theme: Theme::default(),
+                settings,
+                locale: None,
+                ui: PreviewUi::default(),
+            };
+            decode(&render_png(&request, None).unwrap())
+        };
+        let default = render(page(None), None);
+        // Named after the settings host, and drawn for a host of its own.
+        assert_ne!(default, render(page(None), Some(settings)));
+        assert_eq!(
+            render(page(Some("router.lan")), None).dimensions(),
+            (640, 48)
+        );
+        assert!(sample_catalog()
+            .iter()
+            .any(|metric| metric["id"] == "net.ping" && metric["unit"] == "milliseconds"));
     }
 
     #[test]

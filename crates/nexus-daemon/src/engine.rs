@@ -46,14 +46,24 @@ const ROTATION_EVERY: Duration = Duration::from_secs(5);
 const ROTATION_PAUSE: Duration = Duration::from_secs(10);
 /// The longest a scrolling notification stays up.
 const SCROLL_MAX: Duration = Duration::from_secs(30);
+/// The longest a breaking-news banner stretches for a long headline.
+const ALERT_SCROLL_MAX: Duration = Duration::from_secs(60);
 /// Volume change per tap in the call widget's controls.
 const DISCORD_USER_STEP: u16 = 10;
+/// Frame interval while a microphone's level meter shows.
+const METER_FRAME: Duration = Duration::from_millis(66);
 
 pub(crate) struct Engine {
     pub(crate) runtime: Runtime,
     scene: Scene,
     touch: TouchMachine,
     news: SensorState,
+    /// Breaking news: what fired, banners waiting, labelled headlines.
+    alerts: crate::alerts::Alerts,
+    /// The banner (card id, link) the finger went down on.
+    alert_touch: Option<(String, Option<String>)>,
+    /// A banner was on screen at the last tick.
+    banner_up: bool,
     timers: Timers,
     live: LiveBuilder,
     metrics: MetricsHandle,
@@ -62,7 +72,10 @@ pub(crate) struct Engine {
     feedback: Receiver<Feedback>,
     notifications: crate::notifications::Notifications,
     obs: crate::obs::Obs,
+    ping: crate::ping::Ping,
     discord: crate::discord::Discord,
+    audio: crate::audio::Audio,
+    sound: crate::sound::SoundUi,
     focus: crate::focus::Focus,
     /// Profile to return to when the app that switched profiles loses focus.
     auto_return_profile: Option<String>,
@@ -114,7 +127,9 @@ pub(crate) struct EngineParts {
     pub(crate) feedback: Receiver<Feedback>,
     pub(crate) notifications: crate::notifications::Notifications,
     pub(crate) obs: crate::obs::Obs,
+    pub(crate) ping: crate::ping::Ping,
     pub(crate) discord: crate::discord::Discord,
+    pub(crate) audio: crate::audio::Audio,
     pub(crate) focus: crate::focus::Focus,
     pub(crate) logger: nexus_events::EventLogger,
     pub(crate) state_path: Option<PathBuf>,
@@ -128,6 +143,11 @@ impl Engine {
             scene: Scene::default(),
             touch: TouchMachine::default(),
             news: SensorState::default(),
+            alerts: crate::alerts::Alerts::new(
+                parts.state_path.as_deref().map(crate::alerts::state_path),
+            ),
+            alert_touch: None,
+            banner_up: false,
             timers: Timers::default(),
             live: LiveBuilder::default(),
             metrics: parts.metrics,
@@ -136,7 +156,10 @@ impl Engine {
             feedback: parts.feedback,
             notifications: parts.notifications,
             obs: parts.obs,
+            ping: parts.ping,
             discord: parts.discord,
+            audio: parts.audio,
+            sound: crate::sound::SoundUi::default(),
             focus: parts.focus,
             auto_return_profile: None,
             voice_return_profile: None,
@@ -172,6 +195,7 @@ impl Engine {
             // A new touch means the last one lifted, even if its release
             // never arrived.
             self.waking = false;
+            self.alert_touch = None;
             let asleep = self.runtime.touch_wake_blank
                 || (self.runtime.idle_dimmed(now) && self.runtime.settings().idle.wake_touch_only);
             self.runtime.last_touch = now;
@@ -179,6 +203,14 @@ impl Engine {
                 // The first touch only wakes the strip.
                 self.runtime.touch_wake_blank = false;
                 self.waking = true;
+                return;
+            }
+            // A touch on a breaking-news banner belongs to it: tap opens,
+            // hold closes, nothing reaches the page below.
+            if let Some(Overlay::Alert { id, link, .. }) = self.scene.alert_at(now) {
+                self.alert_touch = Some((id.clone(), link.clone()));
+                self.touch.hold = self.news.hold_threshold();
+                self.touch.began(x, Target::default(), now);
                 return;
             }
             let link = self.scene.overlay_link(now);
@@ -189,6 +221,16 @@ impl Engine {
                 self.waking = true;
                 return;
             }
+            // The privacy pill and its list take the touches on them.
+            let palette = nexus_render::Palette::for_theme(&self.runtime.profile().theme);
+            if self.sound.privacy_began(&palette, x) {
+                return;
+            }
+        } else if self.sound.privacy_touching() {
+            if phase == Ended {
+                self.sound.privacy_ended(now);
+            }
+            return;
         }
         if self.waking {
             if phase == Ended {
@@ -199,7 +241,13 @@ impl Engine {
         self.runtime.last_touch = now;
         let interactions = match phase {
             Began => {
-                let target = self.target_at(x);
+                let mut target = self.target_at(x);
+                match self.widget(target.widget) {
+                    Some(widget) if crate::sound::is_sound(&widget) && widget.tap.is_none() => {
+                        target.slider = self.sound.began(&widget, x);
+                    }
+                    _ => self.sound.reset_touch(),
+                }
                 if self.news_widget_at(x).is_some() {
                     self.news.touch_began(now);
                 }
@@ -211,6 +259,9 @@ impl Engine {
         };
         for interaction in interactions {
             self.interact(interaction, now);
+        }
+        if phase == Ended {
+            self.alert_touch = None;
         }
     }
 
@@ -259,7 +310,9 @@ impl Engine {
     pub(crate) fn cancel_touch(&mut self, now: Instant) {
         self.stop_talking();
         self.touch.reset();
+        self.sound.reset_touch();
         self.waking = false;
+        self.alert_touch = None;
         self.news.end_touch();
         self.scene.release(now);
         self.scene.slide(None);
@@ -276,6 +329,10 @@ impl Engine {
     }
 
     fn interact(&mut self, interaction: Interaction, now: Instant) {
+        if let Some((id, link)) = self.alert_touch.clone() {
+            self.alert_gesture(interaction, &id, link, now);
+            return;
+        }
         match interaction {
             Interaction::Press { widget, .. } => {
                 let widget = self.widget(widget);
@@ -312,6 +369,21 @@ impl Engine {
                     self.scene.slide(None);
                     return;
                 };
+                // A sound widget's slider sets PipeWire's volumes, never the
+                // system volume below.
+                if crate::sound::is_sound(&widget) {
+                    match self.sound.slide(&widget, x) {
+                        Some(fraction) if done => {
+                            self.scene.slide(None);
+                            let snapshot = self.audio.snapshot();
+                            let commands = self.sound.slide_done(snapshot.as_ref(), fraction, now);
+                            self.send_sound(&widget.id, commands, now);
+                        }
+                        Some(fraction) => self.scene.slide(Some((widget.id.clone(), fraction))),
+                        None => self.scene.slide(None),
+                    }
+                    return;
+                }
                 // The finger is captured: past the left end of the track is
                 // the bottom of the slider, not a press on the speaker icon.
                 let fraction =
@@ -347,7 +419,10 @@ impl Engine {
                 }
             }
             Interaction::SlideCancel => self.scene.slide(None),
+            // A swipe on a sound widget with more tiles turns its pages.
+            Interaction::Drag { dx } if self.sound.drag_pages(dx) => {}
             Interaction::Drag { dx } => self.scene.drag(dx, now),
+            Interaction::DragEnd { commit, .. } if self.sound.drag_end(commit) => {}
             Interaction::DragEnd { commit, .. } => match commit {
                 Some(forward) => {
                     let direction = if forward {
@@ -441,7 +516,27 @@ impl Engine {
                 }
             }
             WidgetKind::DiscordCall(props) => self.tap_call(widget, props, x, now),
+            WidgetKind::AudioOutput(_) | WidgetKind::Mixer(_) | WidgetKind::Microphone(_) => {
+                let snapshot = self.audio.snapshot();
+                let settings = &self.runtime.settings().audio;
+                let commands = self.sound.tap(widget, x, snapshot.as_ref(), settings);
+                self.send_sound(&widget.id, commands, now);
+            }
             _ => {}
+        }
+    }
+
+    fn send_sound(
+        &mut self,
+        label: &str,
+        commands: Vec<nexus_sensors::audio::AudioCommand>,
+        now: Instant,
+    ) {
+        if commands.is_empty() {
+            return;
+        }
+        if let Err(error) = self.audio.send(label, commands) {
+            self.toast("alert-triangle", format!("{label}: {error}"), now);
         }
     }
 
@@ -564,7 +659,7 @@ impl Engine {
             WidgetKind::News(_) => {
                 // Left half steps back a pair, right half forward.
                 let pairs = if x < widget.x + widget.w / 2 { -1 } else { 1 };
-                let cards = self.metrics.latest().cards.clone();
+                let cards = self.news_cards();
                 self.news.scrub(&cards, pairs, now);
             }
             WidgetKind::Timer(props) => {
@@ -597,8 +692,8 @@ impl Engine {
     }
 
     fn open_headline(&mut self, widget: &Widget, x: u16, now: Instant) {
-        let snapshot = self.metrics.latest();
-        let cards = self.news.touch_targets(&snapshot.cards, now);
+        let cards = self.news_cards();
+        let cards = self.news.touch_targets(&cards, now);
         let Some(slot) = news::slot_for_x(&cards, widget.x, widget.w, x) else {
             return;
         };
@@ -633,8 +728,8 @@ impl Engine {
     }
 
     fn dismiss_headline(&mut self, widget: &Widget, x: u16, now: Instant) {
-        let snapshot = self.metrics.latest();
-        let cards = self.news.touch_targets(&snapshot.cards, now);
+        let cards = self.news_cards();
+        let cards = self.news.touch_targets(&cards, now);
         let Some(slot) = news::slot_for_x(&cards, widget.x, widget.w, x) else {
             return;
         };
@@ -645,6 +740,7 @@ impl Engine {
             _ => false,
         };
         if removed {
+            self.alerts.forget(&card.id);
             self.metrics
                 .update_cards(|cards| cards.retain(|other| other.id != card.id));
             self.metrics.request_refresh();
@@ -659,6 +755,119 @@ impl Engine {
                 ],
             );
         }
+    }
+
+    /// The news widget's cards: the feeds' headlines with the breaking news
+    /// of the last hour first.
+    fn news_cards(&self) -> Vec<nexus_sensors::SensorCard> {
+        self.alerts
+            .decorate(&self.metrics.latest().cards, crate::alerts::unix_now())
+    }
+
+    /// A touch on a breaking-news banner: a tap opens the item (when its
+    /// feed's taps open links) and closes the banner, a hold just closes
+    /// it. Both mark the headline read.
+    fn alert_gesture(
+        &mut self,
+        interaction: Interaction,
+        id: &str,
+        link: Option<String>,
+        now: Instant,
+    ) {
+        let opened = match interaction {
+            Interaction::Tap { .. } => link,
+            Interaction::Hold { .. } => None,
+            _ => return,
+        };
+        self.scene.dismiss_alert(now);
+        if let Some(url) = opened {
+            self.queue("breaking-news", nexus_actions::Action::OpenUrl(url.clone()));
+            log_fields(
+                &self.logger,
+                Level::Info,
+                "news_opened",
+                "tap opened breaking news",
+                [("url", url)],
+            );
+        }
+        if nexus_sensors::mark_rss_item_seen(id).is_ok() {
+            self.metrics.update_cards(|cards| {
+                if let Some(seen) = cards.iter_mut().find(|card| card.id == id) {
+                    seen.status = Some("SEEN".into());
+                }
+            });
+            self.metrics.request_refresh();
+        }
+    }
+
+    /// Breaking news from the latest snapshot: remembers what was seen,
+    /// shows the next banner when none is up, and lists the item first in
+    /// the news widget once its banner is gone.
+    fn breaking_news(
+        &mut self,
+        snapshot: &std::sync::Arc<crate::metrics_cache::MetricsSnapshot>,
+        settings: &nexus_config::Settings,
+        now: Instant,
+    ) {
+        let banners = settings.overlays.alerts;
+        let unix = crate::alerts::unix_now();
+        let fired = self.alerts.observe(snapshot, unix, banners);
+        for news in &fired {
+            log_fields(
+                &self.logger,
+                Level::Info,
+                "breaking_news",
+                "breaking news arrived",
+                [
+                    ("source", news.source.clone()),
+                    ("title", news.title.clone()),
+                ],
+            );
+        }
+        if let Err(error) = self.alerts.save() {
+            log_fields(
+                &self.logger,
+                Level::Warn,
+                "alert_state_failed",
+                "could not store which breaking news was seen",
+                [("error", error.to_string())],
+            );
+        }
+        if !banners {
+            self.alerts.clear_pending();
+        }
+        let free = self.scene.alert_free(now);
+        // Without banners the widget starts over at once; with one, after it.
+        let listed = !fired.is_empty();
+        if (listed && !banners) || (free && std::mem::take(&mut self.banner_up)) {
+            let cards = self.news_cards();
+            self.news.show_first(&cards, now);
+        }
+        if !free || self.runtime.blanked() || self.calibration.is_some() {
+            return;
+        }
+        let Some(news) = self.alerts.next(unix) else {
+            return;
+        };
+        let marquee = news::marquee_style(&snapshot.display);
+        let duration = Duration::from_millis(u64::from(settings.overlays.alert_duration_ms));
+        // A long headline stays until it scrolled through once.
+        let duration = nexus_render::alert_scroll_time(&news.title, &marquee)
+            .map_or(duration, |scroll| {
+                duration.max(scroll.min(ALERT_SCROLL_MAX))
+            });
+        self.scene.show_alert(
+            Overlay::Alert {
+                source: news.source,
+                headline: news.title,
+                link: news.link,
+                id: news.id,
+                marquee,
+            },
+            duration,
+            now,
+        );
+        self.banner_up = true;
     }
 
     fn toggle_entity(&mut self, label: &str, entity_id: &str) {
@@ -767,6 +976,20 @@ impl Engine {
             ActionSpec::Obs { command, target } => {
                 if let Err(error) = self.obs.send(label, *command, target.clone()) {
                     self.toast("alert-triangle", error, now);
+                }
+            }
+            ActionSpec::AudioOutput { devices } => {
+                let switched = match self.audio.snapshot() {
+                    Some(snapshot) => crate::sound::output_action(
+                        devices,
+                        &snapshot,
+                        &self.runtime.settings().audio,
+                    ),
+                    None => Err("PipeWire is not reachable".into()),
+                };
+                match switched {
+                    Ok(commands) => self.send_sound(label, commands, now),
+                    Err(error) => self.toast("alert-triangle", format!("{label}: {error}"), now),
                 }
             }
             // Push to talk works on press and release, not on the tap.
@@ -1164,6 +1387,20 @@ impl Engine {
 
         self.poll_notifications(now);
         let settings = self.runtime.settings().clone();
+        // PipeWire is followed while something shows it; the microphone is
+        // recorded only while its level meter is on screen. A strip that
+        // is off or unplugged shows nothing.
+        let unplugged = self.device.state == nexus_ipc::DeviceState::Unavailable;
+        let awake = !self.runtime.blanked() && !unplugged;
+        let follow = awake
+            && (settings.overlays.privacy
+                || crate::sound::profile_uses_sound(self.runtime.profile()));
+        let meter = (follow && crate::sound::shows_meter(self.runtime.page()))
+            .then(|| self.audio.snapshot())
+            .flatten()
+            .and_then(|snapshot| crate::sound::meter_source(&snapshot, &settings.audio));
+        self.audio
+            .set_wanted(follow, settings.overlays.privacy, meter);
         let in_voice = self
             .discord
             .info()
@@ -1171,6 +1408,7 @@ impl Engine {
         self.follow_voice(in_voice, now);
 
         let snapshot = self.metrics.latest();
+        self.breaking_news(&snapshot, &settings, now);
         if let Some(percent) = snapshot.metrics.volume_percent {
             let volume = (percent, snapshot.volume_muted);
             if self.last_volume.is_some_and(|last| last != volume)
@@ -1235,6 +1473,13 @@ impl Engine {
             self.providers.set_wants(wants);
             self.obs
                 .set_wanted(crate::obs::profile_uses_obs(self.runtime.profile()));
+            // Probes leave the computer: none while nothing shows them.
+            let unplugged = self.device.state == nexus_ipc::DeviceState::Unavailable;
+            self.ping.set_wanted(
+                self.runtime.profile(),
+                &settings,
+                self.runtime.blanked() || unplugged,
+            );
             self.discord.set_wanted(crate::discord::wanted(
                 &self.runtime.config,
                 self.runtime.profile(),
@@ -1269,6 +1514,7 @@ impl Engine {
         let settings = self.runtime.settings().clone();
         let mut live = self.live.build(&settings, &self.providers.provided());
         live.obs = self.obs.info(now);
+        self.ping.fill(&mut live, &settings);
         live.discord = self.discord.info();
         let focus = self.discord_focus(now);
         // Voice widgets with more channels than room turn their pages, but
@@ -1285,6 +1531,23 @@ impl Engine {
             discord.rotation = self.voice_rotation;
             discord.mic_badge = settings.discord.mute_indicator && wants_mic_badge(discord, page);
         }
+        let sound = self.audio.snapshot();
+        live.audio = self.sound.info(
+            sound.as_ref(),
+            &settings.audio,
+            &page.id,
+            self.audio.level(),
+            now,
+        );
+        live.privacy = if settings.overlays.privacy {
+            let badge = live.discord.as_ref().is_some_and(|d| d.mic_badge);
+            let uses = self.audio.privacy();
+            self.sound
+                .privacy(uses, sound.as_ref(), &settings.audio, badge, now)
+        } else {
+            self.sound.hide_privacy();
+            None
+        };
         if let Some(widget) = self
             .runtime
             .page()
@@ -1296,7 +1559,8 @@ impl Engine {
                 self.news
                     .set_pacing(Pacing::new(&snapshot.display, props.font, widget.w));
             }
-            live.news = self.news.frame(&snapshot.cards, now);
+            let cards = self.news_cards();
+            live.news = self.news.frame(&cards, now);
         }
         // The renderer looks timers up by widget id, which is only unique
         // per page: the current page goes in last so its timers win.
@@ -1366,6 +1630,17 @@ impl Engine {
         });
         if shows_discord {
             interval = interval.min(Duration::from_millis(150));
+        }
+        // Sound widgets follow PipeWire promptly; the level meter moves.
+        if page.widgets.iter().any(crate::sound::is_sound) {
+            interval = interval.min(Duration::from_millis(250));
+            if crate::sound::shows_meter(page) && self.audio.level().is_some() {
+                interval = interval.min(METER_FRAME);
+            }
+        }
+        // The privacy pill shrinks, a slider let go shows PipeWire's value.
+        if let Some(change) = self.sound.next_change(now) {
+            interval = interval.min(change.max(Duration::from_millis(5)));
         }
         if let Some(deadline) = self.touch.next_deadline() {
             interval = interval.min(
@@ -1644,7 +1919,10 @@ impl Engine {
                 nexus_ipc::Response {
                     ok: true,
                     message: "metrics".into(),
-                    metrics: Some(crate::live::metric_readings(&self.metrics.latest())),
+                    metrics: Some(crate::live::metric_readings(
+                        &self.metrics.latest(),
+                        &self.ping.readings(self.runtime.settings()),
+                    )),
                     ..nexus_ipc::Response::default()
                 },
                 false,
@@ -1717,5 +1995,7 @@ fn is_page_step(action: &ActionSpec) -> bool {
     }
 }
 
+#[cfg(test)]
+mod sound_tests;
 #[cfg(test)]
 mod tests;

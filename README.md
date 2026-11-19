@@ -22,11 +22,23 @@ CPU, GPU, memory, disks and network as a number, a bar, a graph of the last minu
 
 Most readings come straight from `/proc` and `/sys`: AMD graphics through amdgpu and every hwmon sensor (temperatures, fans, power, voltages). NVIDIA graphics are read through `nvidia-smi`, and the battery of wireless mice, keyboards, headsets and controllers through UPower. On the development machine (AMD graphics), the daemon and the helper programs it calls use under 1 % of one CPU core on a page of system readings; scrolling headlines and animations take more.
 
+A ping widget shows the round trip to your router or any host, turns amber or red from limits you set, and graphs the last minute with lost probes marked, jitter and packet loss. It needs no special rights.
+
+![A clock and two ping widgets, to 1.1.1.1 and to the router, each at 15 ms with a graph of the last minute and one lost probe marked](docs/images/strip-ping.webp)
+
 ### Media controls
 
 Album art, title and progress of whatever is playing in a player that supports MPRIS, such as Spotify, VLC or your browser. Skip and pause with the buttons, and drag along the slider to set the volume. When the track changes or the volume moves, a short pop-up shows it over any other page.
 
 ![Now playing with album art, progress, playback buttons and a volume slider; below, the pop-ups for a new track and for a volume change](docs/images/strip-media.webp)
+
+### Sound
+
+Your outputs as tiles: tap the headset, the speakers or the screen and the sound plays there, with a slider for its volume. A mixer lists every app that plays sound, with its own volume and a tap to mute it. The microphone tile shows the input in use and its live level, mutes it for every app and sets its volume. Linexus reads all of it from PipeWire and follows changes as they happen.
+
+While another app records from a microphone or has a camera open, a red badge at the right edge of every page names it, and a tap lists each app with its device. The level meter itself only listens while its page shows.
+
+![Sound outputs with the headset in use and a volume slider; below, a mixer with Firefox muted, Discord, Spotify and a game; the microphone with its level meter; and the list of apps in use: Discord on the microphone and OBS Studio on the camera](docs/images/strip-sound.webp)
 
 ### App launcher and shortcuts
 
@@ -41,6 +53,10 @@ Headlines from your RSS and Atom feeds in two rows, unread ones first, with long
 ![Two rows of headlines on the strip, each with its source](docs/images/strip-news.webp)
 
 <img src="docs/images/studio-news.webp" alt="The News section in Studio: a field to add a website or feed with suggestions below it, and the list of feeds with the number of headlines, update interval, order and tap action" width="732">
+
+Any feed can bring breaking news: switch it on for a source and its new headlines slide a banner across the strip, above everything else, then head the headlines for an hour. Keywords keep a busy source quiet, and the same story from two sources shows once. Studio suggests tagesschau and SPIEGEL breaking news, and sources in English and French.
+
+![A breaking-news banner: the label BREAKING, the source City News and the headline Bridge reopens after storm damage](docs/images/strip-breaking.webp)
 
 Scripts and other programs can put their own cards between the headlines through a local webhook, for example when a build finishes. Studio receives the cards, so it has to be running; add the name `build` under Connections, then:
 

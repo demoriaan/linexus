@@ -1,3 +1,5 @@
+mod alerts;
+mod audio;
 mod calibration;
 mod discord;
 mod dispatch;
@@ -11,9 +13,11 @@ mod metrics_cache;
 mod news;
 mod notifications;
 mod obs;
+mod ping;
 mod runtime;
 mod scene;
 mod session;
+mod sound;
 mod timers;
 mod touch;
 
@@ -139,6 +143,17 @@ fn main() -> Result<()> {
     } else {
         obs::Obs::on(feedback_tx.clone(), logger.clone(), args.dry_run_actions)
     };
+    // `--once` draws a single frame: no probe would answer in time.
+    let ping = if args.once {
+        ping::Ping::off()
+    } else {
+        ping::Ping::on()
+    };
+    let audio = if args.once {
+        audio::Audio::off()
+    } else {
+        audio::Audio::on(feedback_tx.clone(), logger.clone(), args.dry_run_actions)
+    };
     let dispatcher = dispatch::Dispatcher::new(
         args.dry_run_actions,
         args.allow_shell_actions,
@@ -158,7 +173,9 @@ fn main() -> Result<()> {
         feedback: feedback_rx,
         notifications,
         obs,
+        ping,
         discord,
+        audio,
         focus,
         logger: logger.clone(),
         state_path: (!args.once).then_some(state_path),
